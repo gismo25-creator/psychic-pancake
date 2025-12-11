@@ -13,6 +13,29 @@ from datetime import datetime
 # Load environment
 load_dotenv()
 
+# ============ VEILIGE CONFIGURATIE ============
+# Gebruik Streamlit secrets of environment variables
+# NOOIT hardcoded gevoelige data!
+
+def load_secrets():
+    """Laad gevoelige data veilig"""
+    try:
+        # Eerst Streamlit secrets proberen
+        secrets = st.secrets
+        
+        # Controleer of we in testmodus zijn
+       # TEST_MODE = secrets.get("TEST_MODE", "True") == "True"
+        
+        config = {
+         #   "TEST_MODE": TEST_MODE,
+            "PRIVATE_KEY": secrets.get("PRIVATE_KEY", ""),
+            "ACCOUNT_ADDRESS": secrets.get("ACCOUNT_ADDRESS", ""),
+            "RPC_URL": secrets.get("RPC_URL", ""),
+            "ETHERSCAN_API": secrets.get("ETHERSCAN_API", ""),
+            "MAX_LOSS_ETH": float(secrets.get("MAX_LOSS_ETH", 0.1)),
+            "MAX_TRADE_ETH": float(secrets.get("MAX_TRADE_ETH", 0.5))
+        }
+
 # Connect to Ethereum node
 QUICKNODE_HTTP = "https://orbital-frosty-bush.ethereum-hoodi.quiknode.pro/0490360fbe097aa617ce87bcf31ed4b051c1c36c/"
 w3 = Web3(Web3.HTTPProvider(QUICKNODE_HTTP))
