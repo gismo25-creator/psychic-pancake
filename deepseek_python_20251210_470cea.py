@@ -116,7 +116,7 @@ class ArbitrageBot:
             ("WETH", "USDC"),
             ("WETH", "USDT"),
             ("WETH", "DAI"),
-            ("USDC", "USDT"),
+           # ("USDC", "USDT"),
         ]
         
         # Trading parameters
