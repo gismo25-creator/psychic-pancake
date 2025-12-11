@@ -1,5 +1,5 @@
-streamlit
-pandas
-plotly
-web3
-python-dotenv
+streamlit>=1.28.0
+pandas>=2.0.0
+plotly>=5.17.0
+web3>=6.0.0
+python-dotenv>=1.0.0
