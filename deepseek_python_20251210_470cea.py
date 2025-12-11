@@ -86,18 +86,6 @@ else:
     ETHERSCAN_URL = "https://etherscan.io"
 
 # ============ INITIALISATIE ============
-# Tijdelijke debug code - plaats dit bovenaan je app, na het laden van config
-st.sidebar.header("🔍 Debug Info")
-st.sidebar.write("RPC_URL aanwezig?", "RPC_URL" in config)
-st.sidebar.write("RPC_URL waarde:", config.get("RPC_URL", "NIET GEVONDEN")[:50] + "...")
-
-# Test direct de verbinding
-try:
-    from web3 import Web3
-    test_w3 = Web3(Web3.HTTPProvider(config.get("RPC_URL", "")))
-    st.sidebar.write("Directe test geslaagd?", test_w3.is_connected())
-except Exception as e:
-    st.sidebar.error(f"Directe test fout: {e}")
 
 @st.cache_resource
 def init_web3():
