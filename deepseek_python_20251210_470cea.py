@@ -39,7 +39,7 @@ def load_secrets():
         
         # Voor testnet, gebruik Goerli of Sepolia
         if config["TEST_MODE"]:
-            config["RPC_URL"] = "https://eth-sepolia.g.alchemy.com/v2/demo"  # Demo URL
+            config["RPC_URL"] = "https://eth-sepolia.g.alchemy.com/v2/BA0gd1_jd7ZZNaWU_5lQJ"  # Demo URL
             st.warning("⚠️ TEST MODE ACTIEF - Gebruik alleen testnet!")
         
         return config
