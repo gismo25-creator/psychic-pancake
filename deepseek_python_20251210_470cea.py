@@ -16,7 +16,7 @@ import plotly.graph_objects as go
 import plotly.express as px
 from plotly.subplots import make_subplots
 from web3 import Web3
-from web3.middleware import geth_poa_middleware
+# from web3.middleware import geth_poa_middleware
 from dotenv import load_dotenv
 
 # ============ CONFIGURATIE KLASSEN ============
