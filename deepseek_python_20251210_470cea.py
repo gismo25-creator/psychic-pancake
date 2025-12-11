@@ -32,8 +32,36 @@ TOKENS = {
 }
 
 # ABI for Uniswap/Sushiswap
-with open("router_abi.json") as f:
-    ROUTER_ABI = json.load(f)
+# Laad ABI
+@st.cache_resource
+def load_abi():
+    """Laad contract ABI"""
+    try:
+        with open("router_abi.json", "r") as f:
+            return json.load(f)
+    except FileNotFoundError:
+        # Fallback ABI voor Uniswap Router
+        return [
+            {
+                "inputs": [
+                    {"internalType": "uint256", "name": "amountIn", "type": "uint256"},
+                    {"internalType": "address[]", "name": "path", "type": "address[]"}
+                ],
+                "name": "getAmountsOut",
+                "outputs": [
+                    {"internalType": "uint256[]", "name": "amounts", "type": "uint256[]"}
+                ],
+                "stateMutability": "view",
+                "type": "function"
+            }
+        ]
+
+ROUTER_ABI = load_abi()
+
+# Initialiseer contracts
+uni_router = w3.eth.contract(address=UNISWAP_ROUTER, abi=ROUTER_ABI)
+sushi_router = w3.eth.contract(address=SUSHISWAP_ROUTER, abi=ROUTER_ABI)
+
 
 # Load router contracts
 uni_router = w3.eth.contract(address=UNISWAP_ROUTER, abi=ROUTER_ABI)
