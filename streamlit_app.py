@@ -7,12 +7,18 @@ from core.grid.linear import generate_linear_grid
 from core.grid.fibonacci import generate_fibonacci_grid
 from core.grid.engine import GridEngine
 from core.exchange.simulator import SimulatorTrader
+from core.exchange.live import LiveTrader
+
+if mode == "Simulation (paper)":
+    trader = SimulatorTrader(balance=1000)
+else:
+    trader = LiveTrader(exchange, api_key, api_secret)
 
 st.set_page_config(layout="wide")
 st.title("Grid Trading Bot – Simulation (PnL + Slippage)")
 
-exchange = st.sidebar.selectbox("Exchange", ["Binance","Bitvavo"])
-symbol = st.sidebar.text_input("Pair","BTC/USDT")
+exchange = st.sidebar.selectbox("Exchange", ["Bitvavo","Binance"])
+symbol = st.sidebar.text_input("Pair","BTC/EUR")
 timeframe = st.sidebar.selectbox("Timeframe",["1m","5m","15m"])
 
 grid_type = st.sidebar.selectbox("Grid type",["Linear","Fibonacci"])
