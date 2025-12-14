@@ -4,41 +4,22 @@ class GridEngine:
         self.order_size = order_size
         self.active_buys = set(self.grid[:-1])
         self.active_sells = set()
-        self.open_positions = {}
-        self.closed_grids = []
         self.trades = []
 
     def check_price(self, price, trader, symbol):
         for buy in list(self.active_buys):
             if price <= buy:
-                exec_price = trader.buy(symbol, buy, self.order_size)
+                trader.buy(symbol, buy, self.order_size)
                 self.active_buys.remove(buy)
-                sell = self._next(buy)
-                self.active_sells.add(sell)
-
-                self.open_positions[buy] = {
-                    "buy": exec_price,
-                    "amount": self.order_size
-                }
-                self.trades.append({"side":"BUY","price":exec_price})
+                self.active_sells.add(self._next(buy))
+                self.trades.append({"side":"BUY","price":buy})
 
         for sell in list(self.active_sells):
             if price >= sell:
-                buy_level = self._prev(sell)
-                pos = self.open_positions.pop(buy_level)
-
-                exec_price = trader.sell(symbol, sell, self.order_size)
-                pnl = (exec_price - pos["buy"]) * pos["amount"]
-
-                self.closed_grids.append({
-                    "buy": pos["buy"],
-                    "sell": exec_price,
-                    "pnl": pnl
-                })
-
+                trader.sell(symbol, sell, self.order_size)
                 self.active_sells.remove(sell)
-                self.active_buys.add(buy_level)
-                self.trades.append({"side":"SELL","price":exec_price})
+                self.active_buys.add(self._prev(sell))
+                self.trades.append({"side":"SELL","price":sell})
 
     def _next(self, level):
         return self.grid[self.grid.index(level)+1]
