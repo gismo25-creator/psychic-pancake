@@ -7,12 +7,18 @@ from core.grid.linear import generate_linear_grid
 from core.grid.fibonacci import generate_fibonacci_grid
 from core.grid.engine import GridEngine
 from core.exchange.simulator import SimulatorTrader
+from core.exchange.live import LiveTrader
+
+if mode == "Simulation (paper)":
+    trader = SimulatorTrader(balance=1000)
+else:
+    trader = LiveTrader(exchange, api_key, api_secret)
 
 st.set_page_config(layout="wide")
-st.title("Grid Trading Bot – Full Simulation")
+st.title("Grid Trading Bot – Simulation (PnL + Slippage)")
 
-exchange = st.sidebar.selectbox("Exchange", ["Binance","Bitvavo"])
-symbol = st.sidebar.text_input("Pair","BTC/USDT")
+exchange = st.sidebar.selectbox("Exchange", ["Bitvavo","Binance"])
+symbol = st.sidebar.text_input("Pair","BTC/EUR")
 timeframe = st.sidebar.selectbox("Timeframe",["1m","5m","15m"])
 
 grid_type = st.sidebar.selectbox("Grid type",["Linear","Fibonacci"])
@@ -64,7 +70,16 @@ fig.update_layout(height=700,xaxis_rangeslider_visible=False)
 st.plotly_chart(fig,use_container_width=True)
 
 st.markdown("### Account")
-col1,col2,col3 = st.columns(3)
+col1,col2,col3,col4 = st.columns(4)
+
 col1.metric("Balance",f"{st.session_state.trader.balance:.2f}")
 col2.metric("Position",f"{st.session_state.trader.position:.6f}")
 col3.metric("Equity",f"{st.session_state.trader.equity(price):.2f}")
+
+closed = st.session_state.engine.closed_grids
+wins = [g for g in closed if g["pnl"] > 0]
+winrate = (len(wins)/len(closed)*100) if closed else 0
+
+col4.metric("Winrate",f"{winrate:.1f}%")
+
+st.metric("Grid PnL",f"{sum(g['pnl'] for g in closed):.2f}")
