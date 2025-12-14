@@ -5,53 +5,75 @@ from streamlit_autorefresh import st_autorefresh
 from core.market_data import fetch_ohlcv
 from core.grid.linear import generate_linear_grid
 from core.grid.fibonacci import generate_fibonacci_grid
+from core.grid.engine import GridEngine
+from core.exchange.simulator import SimulatorTrader
 
 st.set_page_config(layout="wide")
-st.title("Grid Trading Bot – Live Chart & Grid")
+st.title("Grid Trading Bot – Simulation (PnL + Slippage)")
 
-exchange = st.sidebar.selectbox("Exchange", ["Binance", "Bitvavo"])
-symbol = st.sidebar.text_input("Trading pair", "BTC/USDT")
-timeframe = st.sidebar.selectbox("Timeframe", ["1m", "5m", "15m"])
+exchange = st.sidebar.selectbox("Exchange", ["Binance","Bitvavo"])
+symbol = st.sidebar.text_input("Pair","BTC/USDT")
+timeframe = st.sidebar.selectbox("Timeframe",["1m","5m","15m"])
 
-grid_type = st.sidebar.selectbox("Grid type", ["Linear", "Fibonacci"])
-lower = st.sidebar.number_input("Lower price", value=50000.0)
-upper = st.sidebar.number_input("Upper price", value=60000.0)
+grid_type = st.sidebar.selectbox("Grid type",["Linear","Fibonacci"])
+lower = st.sidebar.number_input("Lower price",50000.0)
+upper = st.sidebar.number_input("Upper price",60000.0)
+order_size = st.sidebar.number_input("Order size",0.001)
 
-if grid_type == "Linear":
-    levels = st.sidebar.slider("Aantal grids", 3, 20, 10)
-    grid_levels = generate_linear_grid(lower, upper, levels)
+if grid_type=="Linear":
+    levels = st.sidebar.slider("Levels",3,20,10)
+    grid = generate_linear_grid(lower,upper,levels)
 else:
-    grid_levels = generate_fibonacci_grid(lower, upper)
+    grid = generate_fibonacci_grid(lower,upper)
 
-refresh_seconds = st.sidebar.slider("Auto-refresh (seconden)", 5, 60, 15)
+refresh = st.sidebar.slider("Refresh sec",5,60,15)
+st_autorefresh(interval=refresh*1000,key="refresh")
 
-st_autorefresh(interval=refresh_seconds * 1000, key="price_refresh")
+if "trader" not in st.session_state:
+    st.session_state.trader = SimulatorTrader()
 
-df = fetch_ohlcv(exchange, symbol, timeframe)
+if "engine" not in st.session_state:
+    st.session_state.engine = GridEngine(grid,order_size)
 
-fig = go.Figure(
-    data=[
-        go.Candlestick(
-            x=df["timestamp"],
-            open=df["open"],
-            high=df["high"],
-            low=df["low"],
-            close=df["close"],
-            name="Price"
+df = fetch_ohlcv(exchange,symbol,timeframe)
+price = df["close"].iloc[-1]
+
+st.session_state.engine.check_price(price,st.session_state.trader,symbol)
+
+fig = go.Figure(go.Candlestick(
+    x=df["timestamp"],open=df["open"],high=df["high"],
+    low=df["low"],close=df["close"]
+))
+
+for lvl in grid:
+    fig.add_hline(y=lvl,line_dash="dot")
+
+for t in st.session_state.engine.trades:
+    fig.add_scatter(
+        x=[df["timestamp"].iloc[-1]],
+        y=[t["price"]],
+        mode="markers",
+        marker=dict(
+            color="green" if t["side"]=="BUY" else "red",
+            symbol="triangle-up" if t["side"]=="BUY" else "triangle-down",
+            size=10
         )
-    ]
-)
+    )
 
-for level in grid_levels:
-    fig.add_hline(y=level, line_width=1, line_dash="dot", line_color="gray")
+fig.update_layout(height=700,xaxis_rangeslider_visible=False)
+st.plotly_chart(fig,use_container_width=True)
 
-fig.update_layout(
-    height=700,
-    margin=dict(l=10, r=10, t=40, b=10),
-    xaxis_rangeslider_visible=False
-)
+st.markdown("### Account")
+col1,col2,col3,col4 = st.columns(4)
 
-st.plotly_chart(fig, use_container_width=True)
+col1.metric("Balance",f"{st.session_state.trader.balance:.2f}")
+col2.metric("Position",f"{st.session_state.trader.position:.6f}")
+col3.metric("Equity",f"{st.session_state.trader.equity(price):.2f}")
 
-last_price = df["close"].iloc[-1]
-st.caption(f"Laatst bekende prijs: {last_price:.2f}")
+closed = st.session_state.engine.closed_grids
+wins = [g for g in closed if g["pnl"] > 0]
+winrate = (len(wins)/len(closed)*100) if closed else 0
+
+col4.metric("Winrate",f"{winrate:.1f}%")
+
+st.metric("Grid PnL",f"{sum(g['pnl'] for g in closed):.2f}")

@@ -3,3 +3,4 @@ ccxt
 plotly
 pandas
 streamlit-autorefresh
+numpy
