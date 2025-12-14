@@ -11,8 +11,8 @@ from core.exchange.simulator import SimulatorTrader
 st.set_page_config(layout="wide")
 st.title("Grid Trading Bot – Simulation (PnL + Slippage)")
 
-exchange = st.sidebar.selectbox("Exchange", ["Binance","Bitvavo"])
-symbol = st.sidebar.text_input("Pair","BTC/USDT")
+exchange = st.sidebar.selectbox("Exchange", ["Bitvavo"])
+symbol = st.sidebar.text_input("Pair","BTC/EUR")
 timeframe = st.sidebar.selectbox("Timeframe",["1m","5m","15m"])
 
 grid_type = st.sidebar.selectbox("Grid type",["Linear","Fibonacci"])
