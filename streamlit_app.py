@@ -7,7 +7,7 @@ from core.grid.linear import generate_linear_grid
 from core.grid.fibonacci import generate_fibonacci_grid
 from core.grid.engine import GridEngine
 from core.exchange.simulator import SimulatorTrader
-from core.exchange.live import LiveTrader
+#from core.exchange.live import LiveTrader
 
 if mode == "Simulation (paper)":
     trader = SimulatorTrader(balance=1000)
