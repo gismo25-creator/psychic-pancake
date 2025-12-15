@@ -9,16 +9,20 @@ from core.grid.engine import GridEngine
 from core.exchange.simulator import SimulatorTrader
 
 st.set_page_config(layout="wide")
-st.title("Grid Trading Bot – Simulation (PnL + Slippage)")
+st.title("Grid Trading Bot – Simulation (Fixed)")
+
+if st.sidebar.button("Reset session"):
+    st.session_state.clear()
+    st.rerun()
 
 exchange = st.sidebar.selectbox("Exchange", ["Bitvavo"])
 symbol = st.sidebar.text_input("Pair","BTC/EUR")
 timeframe = st.sidebar.selectbox("Timeframe",["1m","5m","15m"])
 
 grid_type = st.sidebar.selectbox("Grid type",["Linear","Fibonacci"])
-lower = st.sidebar.number_input("Lower price",50000.0)
-upper = st.sidebar.number_input("Upper price",60000.0)
-order_size = st.sidebar.number_input("Order size",0.001)
+lower = st.sidebar.number_input("Lower price",1,100000.0,50000.0)
+upper = st.sidebar.number_input("Upper price",1,100000.0,60000.0)
+order_size = st.sidebar.number_input("Order size",0.0001)
 
 if grid_type=="Linear":
     levels = st.sidebar.slider("Levels",3,20,10)
@@ -61,7 +65,7 @@ for t in st.session_state.engine.trades:
     )
 
 fig.update_layout(height=700,xaxis_rangeslider_visible=False)
-st.plotly_chart(fig,use_container_width=True)
+st.plotly_chart(fig, width="stretch")
 
 st.markdown("### Account")
 col1,col2,col3,col4 = st.columns(4)
@@ -75,5 +79,4 @@ wins = [g for g in closed if g["pnl"] > 0]
 winrate = (len(wins)/len(closed)*100) if closed else 0
 
 col4.metric("Winrate",f"{winrate:.1f}%")
-
 st.metric("Grid PnL",f"{sum(g['pnl'] for g in closed):.2f}")
