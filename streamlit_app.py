@@ -19,8 +19,8 @@ if st.sidebar.button("Reset session"):
     st.session_state.clear()
     st.rerun()
 
-exchange = st.sidebar.selectbox("Exchange", ["Binance", "Bitvavo"])
-symbol = st.sidebar.text_input("Pair", "BTC/USDT")
+exchange = st.sidebar.selectbox("Exchange", ["Bitvavo"])
+symbol = st.sidebar.text_input("Pair", "BTC/EUR")
 timeframe = st.sidebar.selectbox("Timeframe", ["1m", "5m", "15m"])
 
 refresh = st.sidebar.slider("Refresh sec", 5, 60, 15)
