@@ -188,20 +188,20 @@ for sym in symbols:
         st.session_state.pair_cfg[sym] = default_cfg(sym)
     cfg = st.session_state.pair_cfg[sym]
 
-    # --- Equity-based order size scaling ---
-    eff_order_size = float(cfg["order_size"])
+    # # --- Equity-based order size scaling ---
+    # eff_order_size = float(cfg["order_size"])
 
-    if enable_scaling:
-        if scaling_mode == "Simple equity scaling":
-            start_eq = float(st.session_state.get("start_equity", 1.0))
-            scale = (eq_now / start_eq) if start_eq > 0 else 1.0
-            eff_order_size = float(cfg["order_size"]) * max(0.0, scale)
-        else:
-            # ATR risk sizing: size = (equity * risk%) / (ATR * multiplier)
-            atr_val_tmp, *_ = compute_metrics(df, price)
-            if atr_val_tmp is not None and not math.isnan(float(atr_val_tmp)) and float(atr_val_tmp) > 0:
-                risk_eur = eq_now * (risk_per_trade_pct / 100.0)
-                eff_order_size = risk_eur / (float(atr_val_tmp) * float(atr_risk_mult))
+    # if enable_scaling:
+    #     if scaling_mode == "Simple equity scaling":
+    #         start_eq = float(st.session_state.get("start_equity", 1.0))
+    #         scale = (eq_now / start_eq) if start_eq > 0 else 1.0
+    #         eff_order_size = float(cfg["order_size"]) * max(0.0, scale)
+    #     else:
+    #         # ATR risk sizing: size = (equity * risk%) / (ATR * multiplier)
+    #         atr_val_tmp, *_ = compute_metrics(df, price)
+    #         if atr_val_tmp is not None and not math.isnan(float(atr_val_tmp)) and float(atr_val_tmp) > 0:
+    #             risk_eur = eq_now * (risk_per_trade_pct / 100.0)
+    #             eff_order_size = risk_eur / (float(atr_val_tmp) * float(atr_risk_mult))
 
     # clamps
 
