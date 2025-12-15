@@ -189,22 +189,19 @@ for sym in symbols:
     cfg = st.session_state.pair_cfg[sym]
 
     # --- Equity-based order size scaling ---
-    #eff_order_size = float(cfg["order_size"])
-
-   # if enable_scaling:
-     #   if scaling_mode == "Simple equity scaling":
-     #       start_eq = float(st.session_state.get("start_equity", eq if eq > 0 else 1.0))
-     #       scale = (eq / start_eq) if start_eq > 0 else 1.0
-      #      eff_order_size = float(cfg["order_size"]) * max(0.0, scale)
-     #   else:
-            # ATR risk sizing: size = (equity * risk%) / (ATR * multiplier)
-      #      atr_val_tmp, *_ = compute_metrics(df, price) # type: ignore
-      #      if atr_val_tmp is not None and not math.isnan(float(atr_val_tmp)) and float(atr_val_tmp) > 0:
-      #          risk_eur = eq * (risk_per_trade_pct / 100.0)
-      #          eff_order_size = risk_eur / (float(atr_val_tmp) * float(atr_risk_mult))
-
+    eff_order_size = float(eff_order_size)
+    if enable_scaling:
+        if scaling_mode == "Simple equity scaling":
+            start_eq = float(st.session_state.get("start_equity", 1000.0))
+            scale = (eq / start_eq) if start_eq > 0 else 1.0
+            eff_order_size = float(eff_order_size) * max(0.0, scale)
+        else:
+            # ATR risk sizing (approx): size = (equity * risk%) / (ATR * multiplier)
+            atr_val_tmp, *_ = compute_metrics(df, price)
+            if (atr_val_tmp is not None) and (not math.isnan(float(atr_val_tmp))) and float(atr_val_tmp) > 0:
+                risk_eur = eq * (risk_per_trade_pct / 100.0)
+                eff_order_size = risk_eur / (float(atr_val_tmp) * float(atr_risk_mult))
     # clamps
-
     eff_order_size = max(float(min_order_size), min(float(max_order_size), float(eff_order_size))) if enable_scaling else eff_order_size
     with st.sidebar.expander(sym, expanded=False):
         cfg["grid_type"] = st.selectbox(f"{sym} grid type", ["Linear", "Fibonacci"], index=0 if cfg["grid_type"]=="Linear" else 1, key=f"{sym}_grid_type")
