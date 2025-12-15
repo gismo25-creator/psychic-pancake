@@ -17,6 +17,15 @@ from core.exchange.simulator import PortfolioSimulatorTrader
 from core.ml.volatility import atr, realized_vol, bollinger_bandwidth, adx
 from core.ml.regime import classify_regime
 
+# --- RUN CONTROL STATE ---
+if "trading_enabled" not in st.session_state:
+    st.session_state.trading_enabled = False
+if "start_pending" not in st.session_state:
+    st.session_state.start_pending = False
+if "start_pending_ts" not in st.session_state:
+    st.session_state.start_pending_ts = 0.0
+
+
 FEE_TIERS_CAT_A = [
     ("€0+",        0.0015, 0.0025),
     ("€100k+",     0.0010, 0.0020),
@@ -32,11 +41,57 @@ FEE_TIERS_CAT_A = [
 ]
 
 st.set_page_config(layout="wide")
-st.title("Grid Trading Bot – Bitvavo (Stop-loss testing in simulation)")
+st.title("Grid Trading Bot – Bitvavo (Simulation + Panic Button + Auto-Pause)")
 
-if st.sidebar.button("Reset session"):
-    st.session_state.clear()
-    st.rerun()
+# --- Top controls: Start / Stop / Stop & Flatten / Reset ---
+c1, c2, c3, c4 = st.columns(4)
+
+with c1:
+    if st.button("▶ START", width="stretch"):
+        # Require confirmation to resume
+        st.session_state.start_pending = True
+        st.session_state.start_pending_ts = time.time()
+
+with c2:
+    if st.button("⏸ STOP", width="stretch"):
+        st.session_state.trading_enabled = False
+        st.session_state.start_pending = False
+
+with c3:
+    if st.button("🛑 STOP & FLATTEN", width="stretch", help="Panic button: closes all positions at market (sim) and pauses trading."):
+        # Panic: close everything and pause. Also latch portfolio stop active.
+        # Mark prices are computed later; set a flag here and execute after prices are known.
+        st.session_state.panic_flatten = True
+        st.session_state.trading_enabled = False
+        st.session_state.start_pending = False
+        st.session_state.portfolio_stop_active = True
+    st.session_state.trading_enabled = False  # auto-pause on portfolio stop
+
+
+with c4:
+    if st.button("⟲ RESET SESSION", width="stretch"):
+        st.session_state.clear()
+        st.rerun()
+
+
+# --- Resume confirmation (anti-misclick) ---
+# Window: 15 seconds to confirm, otherwise pending state expires.
+if st.session_state.start_pending:
+    if (time.time() - st.session_state.start_pending_ts) > 15:
+        st.session_state.start_pending = False
+    else:
+        warn_col, btn_col = st.columns([3, 1])
+        with warn_col:
+            st.warning("Bevestig START (binnen 15s) om trading te hervatten.")
+        with btn_col:
+            if st.button("✅ CONFIRM RESUME", width="stretch"):
+                st.session_state.trading_enabled = True
+                st.session_state.start_pending = False
+
+st.caption(f"Trading status: {'RUNNING' if st.session_state.trading_enabled else 'STOPPED'}")
+
+
+
 
 # --- Market selection (multi-pair)
 st.sidebar.subheader("Market")
@@ -146,10 +201,10 @@ if "portfolio_peak_eq" not in st.session_state:
     st.session_state.portfolio_peak_eq = None
 if "portfolio_stop_active" not in st.session_state:
     st.session_state.portfolio_stop_active = False
-if "panic_flatten" not in st.session_state:
-    st.session_state.panic_flatten = False
 if "asset_halt" not in st.session_state:
     st.session_state.asset_halt = set()  # base assets halted due to stop
+if "pair_paused" not in st.session_state:
+    st.session_state.pair_paused = set()  # symbols paused manually (no trading)
 
 # --- Fetch data per pair
 dfs: Dict[str, pd.DataFrame] = {}
@@ -208,6 +263,13 @@ def apply_hysteresis(symbol: str, raw_regime: str) -> str:
 # Portfolio equity and drawdown
 ts_any = next(iter(last_ts_map.values())) if last_ts_map else pd.Timestamp.utcnow()
 eq = trader.equity(last_prices)
+
+# Execute panic flatten once prices are known
+if st.session_state.get("panic_flatten", False):
+    trader.close_all(last_prices, ts_any, reason="PANIC_FLATTEN")
+    for eng in st.session_state.engines.values():
+        eng.reset_open_cycles()
+    st.session_state.panic_flatten = False
 
 if st.session_state.portfolio_peak_eq is None:
     st.session_state.portfolio_peak_eq = eq
@@ -315,7 +377,10 @@ for sym, df in dfs.items():
 
     base = sym.split("/")[0]
     allow_buys = global_allow_buys and (base not in st.session_state.asset_halt)
-    eng.check_price(price, trader, ts, allow_buys=allow_buys)
+
+    pair_is_paused = sym in st.session_state.pair_paused
+    if st.session_state.trading_enabled and (not pair_is_paused):
+        eng.check_price(price, trader, ts, allow_buys=allow_buys)
 
     pair_summaries[sym] = {
         "price": price,
@@ -329,6 +394,7 @@ for sym, df in dfs.items():
         "closed_pnl": sum(c["pnl"] for c in eng.closed_cycles),
         "trades": len(eng.trades),
         "halted": base in st.session_state.asset_halt,
+        "paused": sym in st.session_state.pair_paused,
     }
 
 # --- Portfolio header
@@ -345,7 +411,7 @@ if st.session_state.asset_halt:
 
 summary_df = pd.DataFrame([{"symbol": k, **v} for k,v in pair_summaries.items()]).sort_values("symbol")
 if not summary_df.empty:
-    show = summary_df[["symbol","price","eff_regime","eff_range_pct","levels","order_size","pos_base","avg_entry","halted","closed_pnl","trades"]].copy()
+    show = summary_df[[symbol,price,eff_regime,eff_range_pct,levels,order_size,pos_base,avg_entry,halted,closed_pnl,trades, "paused"]].copy()
     show["price"] = show["price"].round(2)
     show["eff_range_pct"] = show["eff_range_pct"].round(2)
     show["pos_base"] = show["pos_base"].astype(float).round(6)
@@ -362,6 +428,21 @@ for i, sym in enumerate(dfs.keys()):
         eng: GridEngine = st.session_state.engines[sym]
         grid = eng.grid
         base = sym.split("/")[0]
+
+        # --- Per-pair pause / resume ---
+        p1, p2, p3 = st.columns([1,1,2])
+        is_paused = sym in st.session_state.pair_paused
+        with p1:
+            if st.button("⏸ Pause pair", key=f"pause_{sym}", disabled=is_paused, width="stretch"):
+                st.session_state.pair_paused.add(sym)
+                st.rerun()
+        with p2:
+            if st.button("▶ Resume pair", key=f"resume_{sym}", disabled=(not is_paused), width="stretch"):
+                st.session_state.pair_paused.discard(sym)
+                st.rerun()
+        with p3:
+            st.caption(f"Pair status: {"PAUSED" if is_paused else "ACTIVE"}  |  Global trading: {"RUNNING" if st.session_state.trading_enabled else "STOPPED"}")
+
 
         fig = go.Figure(go.Candlestick(
             x=df["timestamp"], open=df["open"], high=df["high"], low=df["low"], close=df["close"], name="Price"
