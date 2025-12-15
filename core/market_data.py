@@ -1,7 +1,7 @@
 import ccxt
 import pandas as pd
 
-def fetch_ohlcv(exchange_name, symbol, timeframe="5m", limit=200):
+def fetch_ohlcv(exchange_name, symbol, timeframe="5m", limit=300):
     if exchange_name == "Binance":
         exchange = ccxt.binance({"enableRateLimit": True})
     elif exchange_name == "Bitvavo":
