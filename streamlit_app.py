@@ -193,7 +193,7 @@ for sym in symbols:
 
     if enable_scaling:
         if scaling_mode == "Simple equity scaling":
-            start_eq = float(st.session_state.get("start_equity", eq if eq > 0 else 1.0))
+          #  start_eq = float(st.session_state.get("start_equity", eq if eq > 0 else 1.0))
             scale = (eq / start_eq) if start_eq > 0 else 1.0
             eff_order_size = float(cfg["order_size"]) * max(0.0, scale)
         else:
