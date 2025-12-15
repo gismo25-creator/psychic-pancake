@@ -146,6 +146,8 @@ if "portfolio_peak_eq" not in st.session_state:
     st.session_state.portfolio_peak_eq = None
 if "portfolio_stop_active" not in st.session_state:
     st.session_state.portfolio_stop_active = False
+if "panic_flatten" not in st.session_state:
+    st.session_state.panic_flatten = False
 if "asset_halt" not in st.session_state:
     st.session_state.asset_halt = set()  # base assets halted due to stop
 
