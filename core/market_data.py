@@ -3,9 +3,9 @@ import pandas as pd
 
 def fetch_ohlcv(exchange_name, symbol, timeframe="5m", limit=200):
     if exchange_name == "Binance":
-        exchange = ccxt.binance()
+        exchange = ccxt.binance({"enableRateLimit": True})
     elif exchange_name == "Bitvavo":
-        exchange = ccxt.bitvavo()
+        exchange = ccxt.bitvavo({"enableRateLimit": True})
     else:
         raise ValueError("Unsupported exchange")
 
