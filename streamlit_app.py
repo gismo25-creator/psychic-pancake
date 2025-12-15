@@ -20,8 +20,8 @@ symbol = st.sidebar.text_input("Pair","BTC/EUR")
 timeframe = st.sidebar.selectbox("Timeframe",["1m","5m","15m"])
 
 grid_type = st.sidebar.selectbox("Grid type",["Linear","Fibonacci"])
-lower = st.sidebar.number_input("Lower price",1,100000.0,50000.0)
-upper = st.sidebar.number_input("Upper price",1,100000.0,60000.0)
+lower = st.sidebar.number_input("Lower price",50000.0)
+upper = st.sidebar.number_input("Upper price",60000.0)
 order_size = st.sidebar.number_input("Order size",0.0001)
 
 if grid_type=="Linear":
