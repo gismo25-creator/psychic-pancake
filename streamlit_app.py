@@ -193,14 +193,14 @@ for sym in symbols:
 
     if enable_scaling:
         if scaling_mode == "Simple equity scaling":
-          #  start_eq = float(st.session_state.get("start_equity", eq if eq > 0 else 1.0))
-            scale = (eq / start_eq) if start_eq > 0 else 1.0
+            start_eq = float(st.session_state.get("start_equity", 1.0))
+            scale = (eq_now / start_eq) if start_eq > 0 else 1.0
             eff_order_size = float(cfg["order_size"]) * max(0.0, scale)
         else:
             # ATR risk sizing: size = (equity * risk%) / (ATR * multiplier)
             atr_val_tmp, *_ = compute_metrics(df, price)
             if atr_val_tmp is not None and not math.isnan(float(atr_val_tmp)) and float(atr_val_tmp) > 0:
-                risk_eur = eq * (risk_per_trade_pct / 100.0)
+                risk_eur = eq_now * (risk_per_trade_pct / 100.0)
                 eff_order_size = risk_eur / (float(atr_val_tmp) * float(atr_risk_mult))
 
     # clamps
@@ -264,6 +264,12 @@ for sym in symbols:
     last_prices[sym] = float(df["close"].iloc[-1])
     last_ts_map[sym] = df["timestamp"].iloc[-1]
 
+# --- Portfolio equity snapshot (available early for sizing) ---
+eq_now = trader.equity(last_prices) if len(last_prices) else float(trader.cash)
+if "start_equity" not in st.session_state:
+    # Set baseline after we have market prices
+    st.session_state.start_equity = float(eq_now) if eq_now > 0 else 1.0
+
 
 def compute_returns(df: pd.DataFrame) -> pd.Series:
     # log returns; drop first NaN
@@ -321,7 +327,7 @@ def apply_hysteresis(symbol: str, raw_regime: str) -> str:
 # --- STOP-LOSS CHECKS
 # Portfolio equity and drawdown
 ts_any = next(iter(last_ts_map.values())) if last_ts_map else pd.Timestamp.utcnow()
-eq = trader.equity(last_prices)
+eq_now = trader.equity(last_prices)
 
 # Execute panic flatten once prices are known
 if st.session_state.get("panic_flatten", False):
@@ -331,12 +337,12 @@ if st.session_state.get("panic_flatten", False):
     st.session_state.panic_flatten = False
 
 if st.session_state.portfolio_peak_eq is None:
-    st.session_state.portfolio_peak_eq = eq
+    st.session_state.portfolio_peak_eq = eq_now
 else:
-    st.session_state.portfolio_peak_eq = max(st.session_state.portfolio_peak_eq, eq)
+    st.session_state.portfolio_peak_eq = max(st.session_state.portfolio_peak_eq, eq_now)
 
-peak = st.session_state.portfolio_peak_eq or eq
-dd = (peak - eq) / peak if peak > 0 else 0.0
+peak = st.session_state.portfolio_peak_eq or eq_now
+dd = (peak - eq_now) / peak if peak > 0 else 0.0
 
 portfolio_stop_triggered = False
 if enable_portfolio_dd and (dd * 100.0) >= max_dd_pct:
@@ -490,7 +496,7 @@ def buy_guard(symbol: str, amount_base: float, limit_price: float, ts):
 st.subheader("Portfolio")
 colA, colB, colC, colD, colE = st.columns(5)
 colA.metric("Cash (EUR)", f"{trader.cash:.2f}")
-colB.metric("Equity (EUR)", f"{eq:.2f}")
+colB.metric("Equity (EUR)", f"{eq_now:.2f}")
 colC.metric("Peak equity (EUR)", f"{peak:.2f}")
 colD.metric("Drawdown", f"{dd*100:.2f}%")
 colE.metric("Portfolio stop", "ACTIVE" if st.session_state.portfolio_stop_active else "—")
