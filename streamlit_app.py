@@ -17,15 +17,6 @@ from core.exchange.simulator import PortfolioSimulatorTrader
 from core.ml.volatility import atr, realized_vol, bollinger_bandwidth, adx
 from core.ml.regime import classify_regime
 
-# --- RUN CONTROL STATE ---
-if "trading_enabled" not in st.session_state:
-    st.session_state.trading_enabled = False
-if "start_pending" not in st.session_state:
-    st.session_state.start_pending = False
-if "start_pending_ts" not in st.session_state:
-    st.session_state.start_pending_ts = 0.0
-
-
 FEE_TIERS_CAT_A = [
     ("€0+",        0.0015, 0.0025),
     ("€100k+",     0.0010, 0.0020),
@@ -41,57 +32,11 @@ FEE_TIERS_CAT_A = [
 ]
 
 st.set_page_config(layout="wide")
-st.title("Grid Trading Bot – Bitvavo (Simulation + Portfolio Risk Layer v1)")
+st.title("Grid Trading Bot – Bitvavo (Stop-loss testing in simulation)")
 
-# --- Top controls: Start / Stop / Stop & Flatten / Reset ---
-c1, c2, c3, c4 = st.columns(4)
-
-with c1:
-    if st.button("▶ START", width="stretch"):
-        # Require confirmation to resume
-        st.session_state.start_pending = True
-        st.session_state.start_pending_ts = time.time()
-
-with c2:
-    if st.button("⏸ STOP", width="stretch"):
-        st.session_state.trading_enabled = False
-        st.session_state.start_pending = False
-
-with c3:
-    if st.button("🛑 STOP & FLATTEN", width="stretch", help="Panic button: closes all positions at market (sim) and pauses trading."):
-        # Panic: close everything and pause. Also latch portfolio stop active.
-        # Mark prices are computed later; set a flag here and execute after prices are known.
-        st.session_state.panic_flatten = True
-        st.session_state.trading_enabled = False
-        st.session_state.start_pending = False
-        st.session_state.portfolio_stop_active = True
-    st.session_state.trading_enabled = False  # auto-pause on portfolio stop
-
-
-with c4:
-    if st.button("⟲ RESET SESSION", width="stretch"):
-        st.session_state.clear()
-        st.rerun()
-
-
-# --- Resume confirmation (anti-misclick) ---
-# Window: 15 seconds to confirm, otherwise pending state expires.
-if st.session_state.start_pending:
-    if (time.time() - st.session_state.start_pending_ts) > 15:
-        st.session_state.start_pending = False
-    else:
-        warn_col, btn_col = st.columns([3, 1])
-        with warn_col:
-            st.warning("Bevestig START (binnen 15s) om trading te hervatten.")
-        with btn_col:
-            if st.button("✅ CONFIRM RESUME", width="stretch"):
-                st.session_state.trading_enabled = True
-                st.session_state.start_pending = False
-
-st.caption(f"Trading status: {'RUNNING' if st.session_state.trading_enabled else 'STOPPED'}")
-
-
-
+if st.sidebar.button("Reset session"):
+    st.session_state.clear()
+    st.rerun()
 
 # --- Market selection (multi-pair)
 st.sidebar.subheader("Market")
@@ -142,26 +87,6 @@ asset_stop_pct = st.sidebar.slider("Per-asset stop from avg entry (%)", 0.5, 50.
 use_atr_stop = st.sidebar.checkbox("Also enable ATR-based stop", value=False, disabled=not enable_asset_stop)
 atr_mult = st.sidebar.slider("ATR multiple (stop = entry - m*ATR)", 0.5, 10.0, 3.0, step=0.5, disabled=(not enable_asset_stop or not use_atr_stop))
 
-
-# --- Portfolio risk layer v1 ---
-st.sidebar.subheader("Portfolio risk layer v1")
-
-enable_dd_limit = st.sidebar.checkbox("Enable max assets-in-drawdown", value=True)
-dd_asset_threshold_pct = st.sidebar.slider("Drawdown threshold per asset (%)", 0.5, 50.0, 5.0, step=0.5, disabled=not enable_dd_limit)
-max_assets_in_dd = st.sidebar.slider("Max assets in drawdown (count)", 0, 10, 2, step=1, disabled=not enable_dd_limit)
-
-enable_corr_filter = st.sidebar.checkbox("Enable correlation filter", value=True)
-corr_window = st.sidebar.slider("Correlation window (candles)", 20, 300, 120, step=10, disabled=not enable_corr_filter)
-corr_threshold = st.sidebar.slider("Correlation threshold", 0.0, 0.99, 0.85, step=0.01, disabled=not enable_corr_filter)
-
-enable_scaling = st.sidebar.checkbox("Enable equity-based position scaling", value=True)
-scaling_mode = st.sidebar.selectbox("Scaling mode", ["Simple equity scaling", "ATR risk sizing"], index=0, disabled=not enable_scaling)
-min_order_size = st.sidebar.number_input("Min order size (base)", min_value=0.0, value=0.0001, format="%.6f", disabled=not enable_scaling)
-max_order_size = st.sidebar.number_input("Max order size (base)", min_value=0.0, value=0.01, format="%.6f", disabled=not enable_scaling)
-
-risk_per_trade_pct = st.sidebar.slider("Risk per trade (% equity)", 0.01, 2.00, 0.25, step=0.01, disabled=(not enable_scaling or scaling_mode != "ATR risk sizing"))
-atr_risk_mult = st.sidebar.slider("ATR risk multiplier", 0.5, 10.0, 3.0, step=0.5, disabled=(not enable_scaling or scaling_mode != "ATR risk sizing"))
-
 # --- Regime stability
 st.sidebar.subheader("Regime stability")
 cooldown_s = st.sidebar.slider("Cooldown (seconds)", 0, 3600, 300, step=30)
@@ -187,22 +112,6 @@ for sym in symbols:
     if sym not in st.session_state.pair_cfg:
         st.session_state.pair_cfg[sym] = default_cfg(sym)
     cfg = st.session_state.pair_cfg[sym]
-
-    # --- Equity-based order size scaling ---
-    eff_order_size = float(eff_order_size)
-    if enable_scaling:
-        if scaling_mode == "Simple equity scaling":
-            start_eq = float(st.session_state.get("start_equity", 1000.0))
-            scale = (eq / start_eq) if start_eq > 0 else 1.0
-            eff_order_size = float(eff_order_size) * max(0.0, scale)
-        else:
-            # ATR risk sizing (approx): size = (equity * risk%) / (ATR * multiplier)
-            atr_val_tmp, *_ = compute_metrics(df, price)
-            if (atr_val_tmp is not None) and (not math.isnan(float(atr_val_tmp))) and float(atr_val_tmp) > 0:
-                risk_eur = eq * (risk_per_trade_pct / 100.0)
-                eff_order_size = risk_eur / (float(atr_val_tmp) * float(atr_risk_mult))
-    # clamps
-    eff_order_size = max(float(min_order_size), min(float(max_order_size), float(eff_order_size))) if enable_scaling else eff_order_size
     with st.sidebar.expander(sym, expanded=False):
         cfg["grid_type"] = st.selectbox(f"{sym} grid type", ["Linear", "Fibonacci"], index=0 if cfg["grid_type"]=="Linear" else 1, key=f"{sym}_grid_type")
         cfg["base_range_pct"] = st.slider(f"{sym} base range ± (%)", 0.1, 20.0, float(cfg["base_range_pct"]), step=0.1, key=f"{sym}_range")
@@ -211,7 +120,7 @@ for sym in symbols:
         cfg["k_levels"] = st.slider(f"{sym} levels reduction strength", 0.3, 1.0, float(cfg["k_levels"]), step=0.05, key=f"{sym}_klevels")
         if cfg["grid_type"] == "Linear":
             cfg["base_levels"] = st.slider(f"{sym} base levels", 3, 30, int(cfg["base_levels"]), key=f"{sym}_levels")
-        cfg["order_size"] = st.number_input(f"{sym} order size (base)", value=float(eff_order_size), min_value=0.0, format="%.6f", key=f"{sym}_osize")
+        cfg["order_size"] = st.number_input(f"{sym} order size (base)", value=float(cfg["order_size"]), min_value=0.0, format="%.6f", key=f"{sym}_osize")
 
 # --- Initialize portfolio trader
 trader_signature = (maker_fee, taker_fee, slippage_pct, fee_mode, tuple(sorted(per_asset_caps.items())))
@@ -228,9 +137,6 @@ if "trader_signature" not in st.session_state or st.session_state.trader_signatu
     )
 trader: PortfolioSimulatorTrader = st.session_state.trader
 
-if "start_equity" not in st.session_state:
-    st.session_state.start_equity = trader.equity({}) if hasattr(trader, "equity") else 1000.0
-
 # --- State dicts
 if "engines" not in st.session_state:
     st.session_state.engines = {}
@@ -242,8 +148,6 @@ if "portfolio_stop_active" not in st.session_state:
     st.session_state.portfolio_stop_active = False
 if "asset_halt" not in st.session_state:
     st.session_state.asset_halt = set()  # base assets halted due to stop
-if "pair_paused" not in st.session_state:
-    st.session_state.pair_paused = set()  # symbols paused manually (no trading)
 
 # --- Fetch data per pair
 dfs: Dict[str, pd.DataFrame] = {}
@@ -260,23 +164,6 @@ for sym in symbols:
     dfs[sym] = df
     last_prices[sym] = float(df["close"].iloc[-1])
     last_ts_map[sym] = df["timestamp"].iloc[-1]
-
-
-def compute_returns(df: pd.DataFrame) -> pd.Series:
-    # log returns; drop first NaN
-    return (pd.Series(df["close"]).apply(lambda x: float(x)).pipe(lambda s: (s.apply(math.log)).diff())).dropna()
-
-
-# --- Correlation preparation (rolling) ---
-corr_matrix = None
-if enable_corr_filter and len(dfs) >= 2:
-    rets = {}
-    for s, d in dfs.items():
-        r = compute_returns(d)
-        if len(r) >= corr_window:
-            rets[s] = r.tail(corr_window)
-    if len(rets) >= 2:
-        corr_matrix = pd.DataFrame(rets).corr()
 
 def compute_metrics(df: pd.DataFrame, price: float) -> Tuple[float, float, float, float, float, str]:
     dfm = df.copy()
@@ -319,13 +206,6 @@ def apply_hysteresis(symbol: str, raw_regime: str) -> str:
 # Portfolio equity and drawdown
 ts_any = next(iter(last_ts_map.values())) if last_ts_map else pd.Timestamp.utcnow()
 eq = trader.equity(last_prices)
-
-# Execute panic flatten once prices are known
-if st.session_state.get("panic_flatten", False):
-    trader.close_all(last_prices, ts_any, reason="PANIC_FLATTEN")
-    for eng in st.session_state.engines.values():
-        eng.reset_open_cycles()
-    st.session_state.panic_flatten = False
 
 if st.session_state.portfolio_peak_eq is None:
     st.session_state.portfolio_peak_eq = eq
@@ -423,49 +303,17 @@ for sym, df in dfs.items():
         eff_levels = None
         grid = generate_fibonacci_grid(lower, upper)
 
-    sig = (sym, timeframe, cfg["grid_type"], round(lower,2), round(upper,2), len(grid), float(eff_order_size))
+    sig = (sym, timeframe, cfg["grid_type"], round(lower,2), round(upper,2), len(grid), float(cfg["order_size"]))
     if sym not in st.session_state.engines or getattr(st.session_state.engines[sym], "_signature", None) != sig:
         eng = GridEngine(sym, grid, cfg["order_size"])
         eng._signature = sig
         st.session_state.engines[sym] = eng
 
     eng: GridEngine = st.session_state.engines[sym]
-    eng.order_size = float(eff_order_size)
 
     base = sym.split("/")[0]
     allow_buys = global_allow_buys and (base not in st.session_state.asset_halt)
-
-# --- Portfolio risk checks for BUYs (pre-trade) ---
-def buy_guard(symbol: str, amount_base: float, limit_price: float, ts):
-    base = symbol.split("/")[0]
-
-    # 1) Max assets-in-drawdown: if already too many assets in drawdown, block all new buys.
-    if enable_dd_limit and (dd_assets_count >= max_assets_in_dd) and max_assets_in_dd > 0:
-        return False, f"DRAWDOWN_LIMIT: {dd_assets_count} >= {max_assets_in_dd} assets in drawdown"
-
-    # 2) Correlation filter: block buys that are too correlated with existing held assets.
-    if enable_corr_filter and corr_matrix is not None:
-        held_syms = []
-        for b, amt in trader.positions.items():
-            if amt > 1e-12:
-                held_syms.append(f"{b}/EUR")
-        for hs in held_syms:
-            if hs == symbol:
-                continue
-            try:
-                c = float(corr_matrix.loc[symbol, hs])
-            except Exception:
-                continue
-            if not math.isnan(c) and c >= corr_threshold:
-                return False, f"CORRELATION_LIMIT: corr({symbol},{hs})={c:.2f} >= {corr_threshold:.2f}"
-
-    return True, "OK"
-
-
-
-    pair_is_paused = sym in st.session_state.pair_paused
-    if st.session_state.trading_enabled and (not pair_is_paused):
-        eng.check_price(price, trader, ts, allow_buys=allow_buys)
+    eng.check_price(price, trader, ts, allow_buys=allow_buys)
 
     pair_summaries[sym] = {
         "price": price,
@@ -473,14 +321,12 @@ def buy_guard(symbol: str, amount_base: float, limit_price: float, ts):
         "eff_regime": eff_regime,
         "eff_range_pct": eff_range_pct,
         "levels": eff_levels,
-        "order_size": float(eff_order_size),
-        "asset_dd_pct": asset_dd.get(base, 0.0),
+        "order_size": cfg["order_size"],
         "pos_base": trader.positions.get(base, 0.0),
         "avg_entry": trader.avg_entry_price(base),
         "closed_pnl": sum(c["pnl"] for c in eng.closed_cycles),
         "trades": len(eng.trades),
         "halted": base in st.session_state.asset_halt,
-        "paused": sym in st.session_state.pair_paused,
     }
 
 # --- Portfolio header
@@ -497,21 +343,13 @@ if st.session_state.asset_halt:
 
 summary_df = pd.DataFrame([{"symbol": k, **v} for k,v in pair_summaries.items()]).sort_values("symbol")
 if not summary_df.empty:
-    show = summary_df[[symbol,price,eff_regime,eff_range_pct,levels,order_size,pos_base,avg_entry,halted,closed_pnl,trades, "paused"]].copy()
+    show = summary_df[["symbol","price","eff_regime","eff_range_pct","levels","order_size","pos_base","avg_entry","halted","closed_pnl","trades"]].copy()
     show["price"] = show["price"].round(2)
     show["eff_range_pct"] = show["eff_range_pct"].round(2)
     show["pos_base"] = show["pos_base"].astype(float).round(6)
     show["avg_entry"] = show["avg_entry"].astype(float).round(2)
-    show["asset_dd_pct"] = show["asset_dd_pct"].astype(float).round(2)
     show["closed_pnl"] = show["closed_pnl"].round(2)
-    st.dataframe(show.rename(columns={"eff_range_pct":"Eff range ± (%)","closed_pnl":"Realized PnL (EUR)","pos_base":"Pos (base)","asset_dd_pct":"Asset DD (%)"}), width="stretch", height=240)
-
-with st.expander("Correlation matrix (rolling)", expanded=False):
-    if corr_matrix is None:
-        st.caption("Correlation filter disabled or insufficient data.")
-    else:
-        st.dataframe(corr_matrix.round(2), width="stretch", height=220)
-
+    st.dataframe(show.rename(columns={"eff_range_pct":"Eff range ± (%)","closed_pnl":"Realized PnL (EUR)","pos_base":"Pos (base)"}), width="stretch", height=240)
 
 # --- Tabs per pair
 tabs = st.tabs(list(dfs.keys()))
@@ -522,21 +360,6 @@ for i, sym in enumerate(dfs.keys()):
         eng: GridEngine = st.session_state.engines[sym]
         grid = eng.grid
         base = sym.split("/")[0]
-
-        # --- Per-pair pause / resume ---
-        p1, p2, p3 = st.columns([1,1,2])
-        is_paused = sym in st.session_state.pair_paused
-        with p1:
-            if st.button("⏸ Pause pair", key=f"pause_{sym}", disabled=is_paused, width="stretch"):
-                st.session_state.pair_paused.add(sym)
-                st.rerun()
-        with p2:
-            if st.button("▶ Resume pair", key=f"resume_{sym}", disabled=(not is_paused), width="stretch"):
-                st.session_state.pair_paused.discard(sym)
-                st.rerun()
-        with p3:
-            st.caption(f"Pair status: {"PAUSED" if is_paused else "ACTIVE"}  |  Global trading: {"RUNNING" if st.session_state.trading_enabled else "STOPPED"}")
-
 
         fig = go.Figure(go.Candlestick(
             x=df["timestamp"], open=df["open"], high=df["high"], low=df["low"], close=df["close"], name="Price"
