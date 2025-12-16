@@ -181,7 +181,7 @@ risk_per_trade_pct = st.sidebar.slider("Risk per trade (% equity)", 0.01, 2.00, 
 atr_risk_mult = st.sidebar.slider("ATR risk multiplier", 0.5, 10.0, 3.0, step=0.5, disabled=(not enable_scaling or scaling_mode != "ATR risk sizing"))
 reset_baseline = st.sidebar.button("Reset scaling baseline (start equity)", disabled=not enable_scaling)
 if reset_baseline:
-st.session_state.start_equity = None
+    st.session_state.start_equity = None
 
 st.sidebar.subheader("Stop-loss testing (simulation)")
 enable_portfolio_dd = st.sidebar.checkbox("Enable portfolio drawdown stop", value=True)
