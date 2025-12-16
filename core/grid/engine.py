@@ -149,8 +149,8 @@ for sell in list(self.active_sells):
                     "reason": tr.reason,
                 })
 
-def _next(self, level):
+    def _next(self, level):
         return self.grid[self.grid.index(level) + 1]
 
-def _prev(self, level):
+    def _prev(self, level):
         return self.grid[self.grid.index(level) - 1]
