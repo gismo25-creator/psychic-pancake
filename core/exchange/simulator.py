@@ -147,6 +147,18 @@ class PortfolioSimulatorTrader:
                 results.append(tr)
         return results
 
+def record_blocked(self, side: str, symbol: str, limit_price: float, amount_base: float, ts, reason: str):
+    """Record a blocked order intent for UI transparency (no cash/position change)."""
+    base, quote = self._split_symbol(symbol)
+    tr = TradeResult(
+        side=side, symbol=symbol, base=base, quote=quote, time=ts,
+        price=float(limit_price), amount=float(amount_base),
+        fee_rate=self.fee_rate(), fee_paid_quote=0.0,
+        cash_delta_quote=0.0, pos_delta_base=0.0,
+        reason=reason
+    )
+    self.trades.append(tr)
+
     def equity(self, mark_prices: Dict[str, float]) -> float:
         eq = self.cash
         for base, amt in self.positions.items():

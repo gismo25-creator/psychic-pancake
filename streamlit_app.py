@@ -172,17 +172,29 @@ for sym in symbols:
 # ----------------------------
             # Equity-based position scaling
             # ----------------------------
-st.sidebar.subheader("Equity-based position scaling (simulation)")
-enable_scaling = st.sidebar.checkbox("Enable equity-based scaling", value=False)
-scaling_mode = st.sidebar.selectbox("Scaling mode", ["Simple equity scaling", "ATR risk sizing"], index=0, disabled=not enable_scaling)
-min_order_size = st.sidebar.number_input("Min order size (base)", min_value=0.0, value=0.0001, format="%.6f", disabled=not enable_scaling)
-max_order_size = st.sidebar.number_input("Max order size (base)", min_value=0.0, value=0.01, format="%.6f", disabled=not enable_scaling)
-risk_per_trade_pct = st.sidebar.slider("Risk per trade (% equity)", 0.01, 2.00, 0.25, step=0.01, disabled=(not enable_scaling or scaling_mode != "ATR risk sizing"))
-atr_risk_mult = st.sidebar.slider("ATR risk multiplier", 0.5, 10.0, 3.0, step=0.5, disabled=(not enable_scaling or scaling_mode != "ATR risk sizing"))
-reset_baseline = st.sidebar.button("Reset scaling baseline (start equity)", disabled=not enable_scaling)
-if reset_baseline:
-    st.session_state.start_equity = None
+            st.sidebar.subheader("Equity-based position scaling (simulation)")
+            enable_scaling = st.sidebar.checkbox("Enable equity-based scaling", value=False)
+            scaling_mode = st.sidebar.selectbox("Scaling mode", ["Simple equity scaling", "ATR risk sizing"], index=0, disabled=not enable_scaling)
+            min_order_size = st.sidebar.number_input("Min order size (base)", min_value=0.0, value=0.0001, format="%.6f", disabled=not enable_scaling)
+            max_order_size = st.sidebar.number_input("Max order size (base)", min_value=0.0, value=0.01, format="%.6f", disabled=not enable_scaling)
+            risk_per_trade_pct = st.sidebar.slider("Risk per trade (% equity)", 0.01, 2.00, 0.25, step=0.01, disabled=(not enable_scaling or scaling_mode != "ATR risk sizing"))
+            atr_risk_mult = st.sidebar.slider("ATR risk multiplier", 0.5, 10.0, 3.0, step=0.5, disabled=(not enable_scaling or scaling_mode != "ATR risk sizing"))
+            reset_baseline = st.sidebar.button("Reset scaling baseline (start equity)", disabled=not enable_scaling)
+            if reset_baseline:
+                st.session_state.start_equity = None
 
+# ----------------------------
+# Portfolio risk: drawdown & correlation
+# ----------------------------
+st.sidebar.subheader("Portfolio risk: drawdown & correlation")
+
+enable_dd_limit = st.sidebar.checkbox("Enable max assets-in-drawdown", value=True)
+dd_asset_threshold_pct = st.sidebar.slider("Asset drawdown threshold (%)", 0.5, 50.0, 5.0, step=0.5, disabled=not enable_dd_limit)
+max_assets_in_dd = st.sidebar.slider("Max assets in drawdown", 0, 10, 2, step=1, disabled=not enable_dd_limit)
+
+enable_corr_filter = st.sidebar.checkbox("Enable correlation filter", value=True)
+corr_window = st.sidebar.slider("Correlation window (candles)", 20, 300, 120, step=10, disabled=not enable_corr_filter)
+corr_threshold = st.sidebar.slider("Correlation threshold", 0.0, 0.99, 0.85, step=0.01, disabled=not enable_corr_filter)
 st.sidebar.subheader("Stop-loss testing (simulation)")
 enable_portfolio_dd = st.sidebar.checkbox("Enable portfolio drawdown stop", value=True)
 max_dd_pct = st.sidebar.slider(
@@ -316,6 +328,11 @@ for sym in symbols:
     last_ts_map[sym] = df["timestamp"].iloc[-1]
 
 
+def compute_returns(df: pd.DataFrame) -> pd.Series:
+    # log returns on close
+    s = pd.Series(df["close"]).astype(float)
+    return (s.apply(lambda x: math.log(x)).diff()).dropna()
+
 def compute_metrics(df: pd.DataFrame, price: float) -> Tuple[float, float, float, float, float, str]:
     dfm = df.copy()
     dfm["atr"] = atr(dfm, 14)
@@ -360,10 +377,40 @@ def apply_hysteresis(symbol: str, raw_regime: str) -> str:
 
 
 # ----------------------------
+# Correlation prep (rolling)
+# ----------------------------
+corr_matrix = None
+if 'enable_corr_filter' in globals() and enable_corr_filter and len(dfs) >= 2:
+    rets = {}
+    for s, d in dfs.items():
+        r = compute_returns(d)
+        if len(r) >= corr_window:
+            rets[s] = r.tail(corr_window)
+    if len(rets) >= 2:
+        corr_matrix = pd.DataFrame(rets).corr()
+
+# ----------------------------
 # STOP-LOSS CHECKS + PANIC FLATTEN
 # ----------------------------
 ts_any = next(iter(last_ts_map.values())) if last_ts_map else pd.Timestamp.utcnow()
 eq = trader.equity(last_prices)
+# --- Asset drawdown (unrealized vs avg entry) ---
+asset_dd = {}  # base -> dd%
+assets_in_dd = set()
+for sym_, px_ in last_prices.items():
+    base_ = sym_.split("/")[0]
+    pos_ = trader.positions.get(base_, 0.0)
+    if pos_ <= 1e-12:
+        continue
+    avg_ = trader.avg_entry_price(base_)
+    if avg_ is None or avg_ <= 0:
+        continue
+    dd_pct_asset = max(0.0, (avg_ - float(px_)) / float(avg_) * 100.0)
+    asset_dd[base_] = dd_pct_asset
+    if 'enable_dd_limit' in globals() and enable_dd_limit and dd_pct_asset >= dd_asset_threshold_pct:
+        assets_in_dd.add(base_)
+dd_assets_count = len(assets_in_dd)
+
 if st.session_state.start_equity is None:
     st.session_state.start_equity = float(eq) if eq > 0 else 1.0
 
@@ -435,6 +482,30 @@ if asset_stops_triggered:
 global_allow_buys = not st.session_state.portfolio_stop_active
 
 
+# --- BUY guard: portfolio-level pre-trade filters ---
+def buy_guard(symbol: str, amount_base: float, limit_price: float, ts):
+    # 1) Max assets-in-drawdown (hard block on new buys once limit reached)
+    if 'enable_dd_limit' in globals() and enable_dd_limit and max_assets_in_dd > 0:
+        if dd_assets_count >= max_assets_in_dd:
+            return False, f"DRAWDOWN_LIMIT: {dd_assets_count} >= {max_assets_in_dd} assets in drawdown"
+
+    # 2) Correlation filter vs currently held assets (base positions > 0)
+    if 'enable_corr_filter' in globals() and enable_corr_filter and corr_matrix is not None:
+        held_symbols = []
+        for b, amt in trader.positions.items():
+            if amt > 1e-12:
+                held_symbols.append(f"{b}/EUR")
+        for hs in held_symbols:
+            if hs == symbol:
+                continue
+            if (symbol in corr_matrix.index) and (hs in corr_matrix.columns):
+                c = float(corr_matrix.loc[symbol, hs])
+                if (not math.isnan(c)) and c >= corr_threshold:
+                    return False, f"CORRELATION_LIMIT: corr({symbol},{hs})={c:.2f} >= {corr_threshold:.2f}"
+
+    return True, "OK"
+
+
 # ----------------------------
 # Run engines per pair
 # ----------------------------
@@ -504,7 +575,7 @@ for sym, df in dfs.items():
 
     pair_is_paused = sym in st.session_state.pair_paused
     if st.session_state.trading_enabled and (not pair_is_paused):
-        eng.check_price(price, trader, ts, allow_buys=allow_buys)
+        eng.check_price(price, trader, ts, allow_buys=allow_buys, buy_guard=buy_guard)
 
     pair_summaries[sym] = {
         "price": price,
@@ -519,6 +590,8 @@ for sym, df in dfs.items():
         "trades": len(eng.trades),
         "halted": base in st.session_state.asset_halt,
         "paused": pair_is_paused,
+        "asset_dd_pct": float(asset_dd.get(base, 0.0)),
+        "in_drawdown": base in assets_in_dd,
     }
 
 # ----------------------------
@@ -539,23 +612,33 @@ summary_df = pd.DataFrame([{"symbol": k, **v} for k, v in pair_summaries.items()
 if not summary_df.empty:
     show = summary_df[[
         "symbol", "price", "eff_regime", "eff_range_pct", "levels", "order_size",
-        "pos_base", "avg_entry", "halted", "paused", "closed_pnl", "trades"
+        "pos_base", "avg_entry", "asset_dd_pct", "in_drawdown", "halted", "paused", "closed_pnl", "trades"
     ]].copy()
     show["price"] = show["price"].round(2)
     show["eff_range_pct"] = show["eff_range_pct"].round(2)
     show["pos_base"] = show["pos_base"].astype(float).round(6)
     show["avg_entry"] = show["avg_entry"].astype(float).round(2)
+    show["asset_dd_pct"] = show["asset_dd_pct"].astype(float).round(2)
     show["closed_pnl"] = show["closed_pnl"].round(2)
 
     st.dataframe(
         show.rename(columns={
             "eff_range_pct": "Eff range ± (%)",
             "closed_pnl": "Realized PnL (EUR)",
-            "pos_base": "Pos (base)"
+            "pos_base": "Pos (base)",
+            "asset_dd_pct": "Asset DD (%)",
+            "in_drawdown": "In DD?"
         }),
         width="stretch",
         height=240
     )
+
+with st.expander("Correlation matrix (rolling)", expanded=False):
+    if corr_matrix is None:
+        st.caption("Correlation filter disabled or insufficient data.")
+    else:
+        st.dataframe(corr_matrix.round(2), width="stretch", height=220)
+
 
 # ----------------------------
 # Tabs per pair

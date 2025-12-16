@@ -30,12 +30,18 @@ class GridEngine:
         self.active_buys = set(self.grid[:-1])
         self.active_sells = set()
 
-    def check_price(self, price: float, trader, ts, allow_buys: bool = True):
+    def check_price(self, price: float, trader, ts, allow_buys: bool = True, buy_guard=None):
         # BUY
         if allow_buys:
             for buy in list(self.active_buys):
                 if price <= buy:
-                    tr = trader.buy(self.symbol, buy, self.order_size, ts, reason="GRID")
+if buy_guard is not None:
+    ok, why = buy_guard(self.symbol, self.order_size, buy, ts)
+    if not ok:
+        if hasattr(trader, "record_blocked"):
+            trader.record_blocked("BUY", self.symbol, buy, self.order_size, ts, why)
+        continue
+tr = trader.buy(self.symbol, buy, self.order_size, ts, reason="GRID")
                     if tr is None:
                         continue
 
