@@ -743,3 +743,4 @@ for i, sym in enumerate(dfs.keys()):
             st.caption(f"Position: {trader.positions.get(base, 0.0):.6f} {base}")
 
 st.caption("Stop-loss in simulatie: portfolio drawdown stop (optioneel flatten) + per-asset stop (avg-entry % en optioneel ATR). Reset session om stops te clearen.")
+
