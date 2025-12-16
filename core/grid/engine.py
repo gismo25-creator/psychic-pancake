@@ -71,12 +71,10 @@ class GridEngine:
 if getattr(self, "enable_cycle_tp", False) and getattr(self, "cycle_tp_pct", 0.0) > 0:
     tp_mult = 1.0 + (float(self.cycle_tp_pct) / 100.0)
     for buy_level, oc in list(self.open_cycles.items()):
-        try:
-            buy_px = float(oc.buy_price)
-        except Exception:
-            continue
+        buy_px = float(oc.buy_price)
         tp_price = buy_px * tp_mult
         if price >= tp_price:
+            # Sell the actual cycle amount at current price (market-like in sim)
             tr = trader.sell(self.symbol, float(price), float(oc.amount), ts, reason="CYCLE_TP")
             if tr is None:
                 continue
@@ -93,13 +91,18 @@ if getattr(self, "enable_cycle_tp", False) and getattr(self, "cycle_tp_pct", 0.0
                 "pnl": pnl,
             })
 
+            # Remove pending grid-sell level for this cycle, if present
             sell_level = self._next(buy_level)
             if sell_level in self.active_sells:
                 self.active_sells.remove(sell_level)
 
+            # Reactivate buy level for the next cycle
             self.active_buys.add(buy_level)
+
+            # Remove open cycle
             self.open_cycles.pop(buy_level, None)
 
+            # Log trade row
             self.trades.append({
                 "time": tr.time, "symbol": tr.symbol, "side": tr.side,
                 "price": tr.price, "amount": tr.amount,
