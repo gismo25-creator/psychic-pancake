@@ -173,15 +173,15 @@ for sym in symbols:
             # Equity-based position scaling
             # ----------------------------
     st.sidebar.subheader("Equity-based position scaling (simulation)")
-            enable_scaling = st.sidebar.checkbox("Enable equity-based scaling", value=False)
-            scaling_mode = st.sidebar.selectbox("Scaling mode", ["Simple equity scaling", "ATR risk sizing"], index=0, disabled=not enable_scaling)
-            min_order_size = st.sidebar.number_input("Min order size (base)", min_value=0.0, value=0.0001, format="%.6f", disabled=not enable_scaling)
-            max_order_size = st.sidebar.number_input("Max order size (base)", min_value=0.0, value=0.01, format="%.6f", disabled=not enable_scaling)
-            risk_per_trade_pct = st.sidebar.slider("Risk per trade (% equity)", 0.01, 2.00, 0.25, step=0.01, disabled=(not enable_scaling or scaling_mode != "ATR risk sizing"))
-            atr_risk_mult = st.sidebar.slider("ATR risk multiplier", 0.5, 10.0, 3.0, step=0.5, disabled=(not enable_scaling or scaling_mode != "ATR risk sizing"))
-            reset_baseline = st.sidebar.button("Reset scaling baseline (start equity)", disabled=not enable_scaling)
-            if reset_baseline:
-                st.session_state.start_equity = None
+    enable_scaling = st.sidebar.checkbox("Enable equity-based scaling", value=False)
+    scaling_mode = st.sidebar.selectbox("Scaling mode", ["Simple equity scaling", "ATR risk sizing"], index=0, disabled=not enable_scaling)
+    min_order_size = st.sidebar.number_input("Min order size (base)", min_value=0.0, value=0.0001, format="%.6f", disabled=not enable_scaling)
+    max_order_size = st.sidebar.number_input("Max order size (base)", min_value=0.0, value=0.01, format="%.6f", disabled=not enable_scaling)
+    risk_per_trade_pct = st.sidebar.slider("Risk per trade (% equity)", 0.01, 2.00, 0.25, step=0.01, disabled=(not enable_scaling or scaling_mode != "ATR risk sizing"))
+    atr_risk_mult = st.sidebar.slider("ATR risk multiplier", 0.5, 10.0, 3.0, step=0.5, disabled=(not enable_scaling or scaling_mode != "ATR risk sizing"))
+    reset_baseline = st.sidebar.button("Reset scaling baseline (start equity)", disabled=not enable_scaling)
+    if reset_baseline:
+    st.session_state.start_equity = None
 
 st.sidebar.subheader("Stop-loss testing (simulation)")
 enable_portfolio_dd = st.sidebar.checkbox("Enable portfolio drawdown stop", value=True)
