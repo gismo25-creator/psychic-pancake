@@ -33,6 +33,9 @@ if "start_pending_ts" not in st.session_state:
 if "panic_flatten" not in st.session_state:
     st.session_state.panic_flatten = False
 
+if "start_equity" not in st.session_state:
+    st.session_state.start_equity = None
+
 
 FEE_TIERS_CAT_A = [
     ("€0+",        0.0015, 0.0025),
@@ -52,7 +55,7 @@ st.set_page_config(layout="wide")
 st.title("Grid Trading Bot – Bitvavo (Simulation + Panic Button + Auto-Pause)")
 
 # --- Top controls: Start / Stop / Stop & Flatten / Reset ---
-c1, c2, c3, c4 = st.columns(4)
+c1, c2, c3, c4, c5 = st.columns(5)
 
 with c1:
     if st.button("▶ START", width="stretch"):
@@ -79,6 +82,15 @@ with c3:
         st.session_state.portfolio_stop_active = True
 
 with c4:
+    if st.button("🔓 UNLATCH STOP", width="stretch", help="Clear portfolio stop latch (allow new buys again). Trading stays paused; resume manually."):
+        st.session_state.portfolio_stop_active = False
+        st.session_state.trading_enabled = False
+        st.session_state.start_pending = False
+        # Reset peak to current equity to avoid immediate retrigger.
+        # (Peak is set later after equity is computed.)
+        st.session_state.portfolio_peak_eq = None
+
+with c5:
     if st.button("⟲ RESET SESSION", width="stretch"):
         st.session_state.clear()
         st.rerun()
@@ -156,6 +168,21 @@ for sym in symbols:
 # ----------------------------
 # Stop-loss testing (simulation)
 # ----------------------------
+
+# ----------------------------
+            # Equity-based position scaling
+            # ----------------------------
+            st.sidebar.subheader("Equity-based position scaling (simulation)")
+            enable_scaling = st.sidebar.checkbox("Enable equity-based scaling", value=False)
+            scaling_mode = st.sidebar.selectbox("Scaling mode", ["Simple equity scaling", "ATR risk sizing"], index=0, disabled=not enable_scaling)
+            min_order_size = st.sidebar.number_input("Min order size (base)", min_value=0.0, value=0.0001, format="%.6f", disabled=not enable_scaling)
+            max_order_size = st.sidebar.number_input("Max order size (base)", min_value=0.0, value=0.01, format="%.6f", disabled=not enable_scaling)
+            risk_per_trade_pct = st.sidebar.slider("Risk per trade (% equity)", 0.01, 2.00, 0.25, step=0.01, disabled=(not enable_scaling or scaling_mode != "ATR risk sizing"))
+            atr_risk_mult = st.sidebar.slider("ATR risk multiplier", 0.5, 10.0, 3.0, step=0.5, disabled=(not enable_scaling or scaling_mode != "ATR risk sizing"))
+            reset_baseline = st.sidebar.button("Reset scaling baseline (start equity)", disabled=not enable_scaling)
+            if reset_baseline:
+                st.session_state.start_equity = None
+
 st.sidebar.subheader("Stop-loss testing (simulation)")
 enable_portfolio_dd = st.sidebar.checkbox("Enable portfolio drawdown stop", value=True)
 max_dd_pct = st.sidebar.slider(
@@ -337,6 +364,9 @@ def apply_hysteresis(symbol: str, raw_regime: str) -> str:
 # ----------------------------
 ts_any = next(iter(last_ts_map.values())) if last_ts_map else pd.Timestamp.utcnow()
 eq = trader.equity(last_prices)
+if st.session_state.start_equity is None:
+    st.session_state.start_equity = float(eq) if eq > 0 else 1.0
+
 
 # Execute panic flatten once prices are known (always)
 if st.session_state.get("panic_flatten", False):
@@ -415,6 +445,22 @@ for sym, df in dfs.items():
     ts = last_ts_map[sym]
     cfg = st.session_state.pair_cfg[sym]
 
+    # --- Effective order size (equity scaling) ---
+    eff_order_size = float(cfg["order_size"])
+    if "enable_scaling" in globals() and enable_scaling:
+        if scaling_mode == "Simple equity scaling":
+            start_eq = float(st.session_state.start_equity or 1.0)
+            scale = (eq / start_eq) if start_eq > 0 else 1.0
+            eff_order_size = float(cfg["order_size"]) * max(0.0, scale)
+        else:
+            # ATR risk sizing: size = (equity * risk%) / (ATR * multiplier)
+            atr_tmp, *_ = compute_metrics(df, price)
+            if atr_tmp is not None and (not math.isnan(float(atr_tmp))) and float(atr_tmp) > 0:
+                risk_eur = float(eq) * (float(risk_per_trade_pct) / 100.0)
+                eff_order_size = risk_eur / (float(atr_tmp) * float(atr_risk_mult))
+        # clamps
+        eff_order_size = max(float(min_order_size), min(float(max_order_size), float(eff_order_size)))
+
     atr_val, atr_pct, rv_val, bb_val, adx_val, raw_regime = compute_metrics(df, price)
     atr_abs[sym] = atr_val
     eff_regime = apply_hysteresis(sym, raw_regime)
@@ -451,6 +497,7 @@ for sym, df in dfs.items():
         st.session_state.engines[sym] = eng
 
     eng: GridEngine = st.session_state.engines[sym]
+    eng.order_size = float(eff_order_size)
 
     base = sym.split("/")[0]
     allow_buys = global_allow_buys and (base not in st.session_state.asset_halt)
@@ -465,7 +512,7 @@ for sym, df in dfs.items():
         "eff_regime": eff_regime,
         "eff_range_pct": eff_range_pct,
         "levels": eff_levels,
-        "order_size": cfg["order_size"],
+        "order_size": float(eff_order_size),
         "pos_base": trader.positions.get(base, 0.0),
         "avg_entry": trader.avg_entry_price(base),
         "closed_pnl": sum(c["pnl"] for c in eng.closed_cycles),
