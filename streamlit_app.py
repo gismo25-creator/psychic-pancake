@@ -172,7 +172,7 @@ for sym in symbols:
 # ----------------------------
             # Equity-based position scaling
             # ----------------------------
-            st.sidebar.subheader("Equity-based position scaling (simulation)")
+    st.sidebar.subheader("Equity-based position scaling (simulation)")
             enable_scaling = st.sidebar.checkbox("Enable equity-based scaling", value=False)
             scaling_mode = st.sidebar.selectbox("Scaling mode", ["Simple equity scaling", "ATR risk sizing"], index=0, disabled=not enable_scaling)
             min_order_size = st.sidebar.number_input("Min order size (base)", min_value=0.0, value=0.0001, format="%.6f", disabled=not enable_scaling)
