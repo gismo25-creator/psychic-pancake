@@ -664,10 +664,18 @@ if st.session_state.asset_halt:
 
 summary_df = pd.DataFrame([{"symbol": k, **v} for k, v in pair_summaries.items()]).sort_values("symbol")
 if not summary_df.empty:
-    show = summary_df[[
-        "symbol", "price", "eff_regime", "eff_range_pct", "levels", "order_size",
+    # Defensive: ensure optional ML columns exist (older session states / partial data)
+    for col in ["regime_dur_min", "vol_cluster_acf1"]:
+        if col not in summary_df.columns:
+            summary_df[col] = float("nan")
+
+    cols = [
+        "symbol", "price", "eff_regime", "regime_dur_min", "vol_cluster_acf1",
+        "eff_range_pct", "levels", "order_size",
         "pos_base", "avg_entry", "asset_dd_pct", "in_drawdown", "halted", "paused", "closed_pnl", "trades"
-    ]].copy()
+    ]
+    show = summary_df.reindex(columns=cols).copy()
+
     show["price"] = show["price"].round(2)
     show["eff_range_pct"] = show["eff_range_pct"].round(2)
     show["regime_dur_min"] = show["regime_dur_min"].astype(float).round(1)
