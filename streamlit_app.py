@@ -172,16 +172,16 @@ for sym in symbols:
 # ----------------------------
             # Equity-based position scaling
             # ----------------------------
-st.sidebar.subheader("Equity-based position scaling (simulation)")
-enable_scaling = st.sidebar.checkbox("Enable equity-based scaling", value=False)
-scaling_mode = st.sidebar.selectbox("Scaling mode", ["Simple equity scaling", "ATR risk sizing"], index=0, disabled=not enable_scaling)
-min_order_size = st.sidebar.number_input("Min order size (base)", min_value=0.0, value=0.0001, format="%.6f", disabled=not enable_scaling)
-max_order_size = st.sidebar.number_input("Max order size (base)", min_value=0.0, value=0.01, format="%.6f", disabled=not enable_scaling)
-risk_per_trade_pct = st.sidebar.slider("Risk per trade (% equity)", 0.01, 2.00, 0.25, step=0.01, disabled=(not enable_scaling or scaling_mode != "ATR risk sizing"))
-atr_risk_mult = st.sidebar.slider("ATR risk multiplier", 0.5, 10.0, 3.0, step=0.5, disabled=(not enable_scaling or scaling_mode != "ATR risk sizing"))
-reset_baseline = st.sidebar.button("Reset scaling baseline (start equity)", disabled=not enable_scaling)
-if reset_baseline:
-    st.session_state.start_equity = None
+            st.sidebar.subheader("Equity-based position scaling (simulation)")
+            enable_scaling = st.sidebar.checkbox("Enable equity-based scaling", value=False)
+            scaling_mode = st.sidebar.selectbox("Scaling mode", ["Simple equity scaling", "ATR risk sizing"], index=0, disabled=not enable_scaling)
+            min_order_size = st.sidebar.number_input("Min order size (base)", min_value=0.0, value=0.0001, format="%.6f", disabled=not enable_scaling)
+            max_order_size = st.sidebar.number_input("Max order size (base)", min_value=0.0, value=0.01, format="%.6f", disabled=not enable_scaling)
+            risk_per_trade_pct = st.sidebar.slider("Risk per trade (% equity)", 0.01, 2.00, 0.25, step=0.01, disabled=(not enable_scaling or scaling_mode != "ATR risk sizing"))
+            atr_risk_mult = st.sidebar.slider("ATR risk multiplier", 0.5, 10.0, 3.0, step=0.5, disabled=(not enable_scaling or scaling_mode != "ATR risk sizing"))
+            reset_baseline = st.sidebar.button("Reset scaling baseline (start equity)", disabled=not enable_scaling)
+            if reset_baseline:
+                st.session_state.start_equity = None
 
 # ----------------------------
 # Portfolio risk: drawdown & correlation
@@ -240,6 +240,8 @@ def default_cfg(sym: str):
         "k_levels": 0.7,
         "base_levels": 10,
         "order_size": 0.001,
+        "enable_cycle_tp": False,
+        "cycle_tp_pct": 0.35,
     }
 
 for sym in symbols:
@@ -271,6 +273,13 @@ for sym in symbols:
         cfg["order_size"] = st.number_input(
             f"{sym} order size (base)", value=float(cfg["order_size"]),
             min_value=0.0, format="%.6f", key=f"{sym}_osize"
+        )
+        cfg["enable_cycle_tp"] = st.checkbox(
+            f"{sym} Cycle take-profit (per cycle)", value=bool(cfg.get("enable_cycle_tp", False)), key=f"{sym}_ctp_en"
+        )
+        cfg["cycle_tp_pct"] = st.slider(
+            f"{sym} Cycle TP (%)", 0.05, 5.0, float(cfg.get("cycle_tp_pct", 0.35)), step=0.05,
+            disabled=(not bool(cfg.get("enable_cycle_tp", False))), key=f"{sym}_ctp_pct"
         )
 
 
@@ -561,7 +570,7 @@ for sym, df in dfs.items():
         eff_levels = None
         grid = generate_fibonacci_grid(lower, upper)
 
-    sig = (sym, timeframe, cfg["grid_type"], round(lower, 2), round(upper, 2), len(grid), float(cfg["order_size"]))
+    sig = (sym, timeframe, cfg["grid_type"], round(lower, 2), round(upper, 2), len(grid), float(cfg["order_size"]), bool(cfg.get("enable_cycle_tp", False)), float(cfg.get("cycle_tp_pct", 0.35)))
     if sym not in st.session_state.engines or getattr(st.session_state.engines[sym], "_signature", None) != sig:
         eng = GridEngine(sym, grid, cfg["order_size"])
         eng._signature = sig
@@ -569,6 +578,8 @@ for sym, df in dfs.items():
 
     eng: GridEngine = st.session_state.engines[sym]
     eng.order_size = float(eff_order_size)
+    eng.enable_cycle_tp = bool(cfg.get("enable_cycle_tp", False))
+    eng.cycle_tp_pct = float(cfg.get("cycle_tp_pct", 0.35))
 
     base = sym.split("/")[0]
     allow_buys = global_allow_buys and (base not in st.session_state.asset_halt)
@@ -584,6 +595,8 @@ for sym, df in dfs.items():
         "eff_range_pct": eff_range_pct,
         "levels": eff_levels,
         "order_size": float(eff_order_size),
+        "cycle_tp_on": bool(cfg.get("enable_cycle_tp", False)),
+        "cycle_tp_pct": float(cfg.get("cycle_tp_pct", 0.35)) if bool(cfg.get("enable_cycle_tp", False)) else 0.0,
         "pos_base": trader.positions.get(base, 0.0),
         "avg_entry": trader.avg_entry_price(base),
         "closed_pnl": sum(c["pnl"] for c in eng.closed_cycles),

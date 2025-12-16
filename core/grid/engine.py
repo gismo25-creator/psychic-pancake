@@ -66,8 +66,51 @@ class GridEngine:
                         "reason": tr.reason,
                     })
 
-        # SELL (always allowed)
-        for sell in list(self.active_sells):
+# --- Per-cycle TP (optional) ---
+# If enabled: close the open cycle early once price >= buy_price*(1+tp%)
+if getattr(self, "enable_cycle_tp", False) and getattr(self, "cycle_tp_pct", 0.0) > 0:
+    tp_mult = 1.0 + (float(self.cycle_tp_pct) / 100.0)
+    for buy_level, oc in list(self.open_cycles.items()):
+        try:
+            buy_px = float(oc.buy_price)
+        except Exception:
+            continue
+        tp_price = buy_px * tp_mult
+        if price >= tp_price:
+            tr = trader.sell(self.symbol, float(price), float(oc.amount), ts, reason="CYCLE_TP")
+            if tr is None:
+                continue
+
+            cash_in = tr.cash_delta_quote
+            pnl = cash_in - oc.cash_out
+
+            self.closed_cycles.append({
+                "symbol": tr.symbol,
+                "buy_time": oc.buy_time, "sell_time": tr.time,
+                "buy_price": oc.buy_price, "sell_price": tr.price,
+                "amount": tr.amount,
+                "cash_out": oc.cash_out, "cash_in": cash_in,
+                "pnl": pnl,
+            })
+
+            sell_level = self._next(buy_level)
+            if sell_level in self.active_sells:
+                self.active_sells.remove(sell_level)
+
+            self.active_buys.add(buy_level)
+            self.open_cycles.pop(buy_level, None)
+
+            self.trades.append({
+                "time": tr.time, "symbol": tr.symbol, "side": tr.side,
+                "price": tr.price, "amount": tr.amount,
+                "fee_rate": tr.fee_rate, "fee_paid": tr.fee_paid_quote,
+                "cash_delta": tr.cash_delta_quote,
+                "pnl": pnl,
+                "reason": tr.reason,
+            })
+
+# SELL (always allowed)
+for sell in list(self.active_sells):
             if price >= sell:
                 buy_level = self._prev(sell)
                 oc = self.open_cycles.pop(buy_level, None)
