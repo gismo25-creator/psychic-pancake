@@ -103,7 +103,7 @@ class GridEngine:
             for buy_level, oc in list(self.open_cycles.items()):
                 tp_price = float(oc.buy_price) * tp_mult
                 if price >= tp_price:
-                    tr = trader.sell(self.symbol, float(price), float(oc.amount), ts, reason="CYCLE_TP")
+                    tr = trader.sell(self.symbol, float(tp_price), float(oc.amount), ts, reason="CYCLE_TP")
                     if tr is None:
                         continue
 
