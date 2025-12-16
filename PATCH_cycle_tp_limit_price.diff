@@ -1,0 +1,6 @@
+diff --git a/core/grid/engine.py b/core/grid/engine.py
+--- a/core/grid/engine.py
++++ b/core/grid/engine.py
+@@
+-                    tr = trader.sell(self.symbol, float(price), float(oc.amount), ts, reason="CYCLE_TP")
++                    tr = trader.sell(self.symbol, float(tp_price), float(oc.amount), ts, reason="CYCLE_TP")
