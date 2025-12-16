@@ -575,7 +575,7 @@ for sym, df in dfs.items():
 
     pair_is_paused = sym in st.session_state.pair_paused
     if st.session_state.trading_enabled and (not pair_is_paused):
-    eng.check_price(price, trader, ts, allow_buys=allow_buys, buy_guard=buy_guard)
+        eng.check_price(price, trader, ts, allow_buys=allow_buys, buy_guard=buy_guard)
 
     pair_summaries[sym] = {
         "price": price,
