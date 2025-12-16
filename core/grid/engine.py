@@ -1,47 +1,76 @@
+from __future__ import annotations
+
 from dataclasses import dataclass
-from typing import Dict
+from typing import Any, Dict, List, Optional, Set, Tuple
+
 
 @dataclass
 class OpenCycle:
-    cash_out: float   # positive EUR spent (includes buy fee)
+    cash_out: float
     buy_price: float
     amount: float
-    buy_time: object
+    buy_time: Any
+
 
 class GridEngine:
-    '''
-    Exact realized PnL:
-    - Buy stores exact cash_out from portfolio ledger
-    - Sell closes and realized pnl = cash_in - cash_out (matches portfolio exactly)
-    '''
-    def __init__(self, symbol: str, grid_levels, order_size):
-        self.symbol = symbol
-        self.grid = sorted(grid_levels)
-        self.order_size = order_size
-        self.active_buys = set(self.grid[:-1])
-        self.active_sells = set()
-        self.open_cycles: Dict[float, OpenCycle] = {}  # buy_level -> OpenCycle
-        self.closed_cycles = []
-        self.trades = []  # executed trades only
+    """Simple grid engine (simulation-oriented).
 
-    def reset_open_cycles(self):
-        # Used when we forced a flat (stop-loss) so the grid state doesn't refer to stale entries.
-        self.open_cycles = {}
+    - Tracks per-level buy triggers and corresponding sell levels.
+    - Maintains per-cycle accounting (cash_out / cash_in) for exact realized PnL.
+    - Supports an optional per-cycle take-profit (CYCLE_TP) that exits a cycle early.
+    - Supports an optional buy_guard(symbol, amount_base, limit_price, ts) -> (ok, reason).
+    """
+
+    def __init__(self, symbol: str, grid: List[float], order_size: float):
+        self.symbol = symbol
+        self.grid = sorted([float(x) for x in grid])
+        if len(self.grid) < 2:
+            raise ValueError("Grid must contain at least 2 levels")
+
+        self.order_size = float(order_size)
+
+        # Cycle TP (set by Streamlit per pair)
+        self.enable_cycle_tp: bool = False
+        self.cycle_tp_pct: float = 0.35
+
+        # Internal state
+        self.active_buys: Set[float] = set(self.grid[:-1])   # last level has no next sell
+        self.active_sells: Set[float] = set()
+        self.open_cycles: Dict[float, OpenCycle] = {}        # key: buy_level
+        self.closed_cycles: List[Dict[str, Any]] = []
+        self.trades: List[Dict[str, Any]] = []
+
+    def reset_open_cycles(self) -> None:
+        """Clears all pending cycles and restores initial buy levels."""
         self.active_buys = set(self.grid[:-1])
         self.active_sells = set()
-    def check_price(self, price: float, trader, ts, allow_buys: bool = True, buy_guard=None):
+        self.open_cycles = {}
+
+    def _next(self, level: float) -> float:
+        i = self.grid.index(level)
+        return self.grid[i + 1]
+
+    def _prev(self, level: float) -> float:
+        i = self.grid.index(level)
+        return self.grid[i - 1]
+
+    def check_price(self, price: float, trader, ts, allow_buys: bool = True, buy_guard=None) -> None:
+        price = float(price)
+
+        # ----------------------------
         # BUY
+        # ----------------------------
         if allow_buys:
             for buy in list(self.active_buys):
                 if price <= buy:
                     if buy_guard is not None:
-                        ok, why = buy_guard(self.symbol, self.order_size, buy, ts)
+                        ok, why = buy_guard(self.symbol, float(self.order_size), float(buy), ts)
                         if not ok:
                             if hasattr(trader, "record_blocked"):
-                                trader.record_blocked("BUY", self.symbol, buy, self.order_size, ts, why)
+                                trader.record_blocked("BUY", self.symbol, float(buy), float(self.order_size), ts, why)
                             continue
 
-                    tr = trader.buy(self.symbol, buy, self.order_size, ts, reason="GRID")
+                    tr = trader.buy(self.symbol, float(buy), float(self.order_size), ts, reason="GRID")
                     if tr is None:
                         continue
 
@@ -49,91 +78,88 @@ class GridEngine:
                     sell = self._next(buy)
                     self.active_sells.add(sell)
 
-                    cash_out = -tr.cash_delta_quote  # positive
+                    cash_out = -float(tr.cash_delta_quote)  # positive
                     self.open_cycles[buy] = OpenCycle(
                         cash_out=cash_out,
-                        buy_price=tr.price,
-                        amount=tr.amount,
+                        buy_price=float(tr.price),
+                        amount=float(tr.amount),
                         buy_time=tr.time,
                     )
 
                     self.trades.append({
                         "time": tr.time, "symbol": tr.symbol, "side": tr.side,
-                        "price": tr.price, "amount": tr.amount,
-                        "fee_rate": tr.fee_rate, "fee_paid": tr.fee_paid_quote,
-                        "cash_delta": tr.cash_delta_quote,
+                        "price": float(tr.price), "amount": float(tr.amount),
+                        "fee_rate": float(tr.fee_rate), "fee_paid": float(tr.fee_paid_quote),
+                        "cash_delta": float(tr.cash_delta_quote),
                         "pnl": 0.0,
                         "reason": tr.reason,
                     })
 
-# --- Per-cycle TP (optional) ---
-# If enabled: close the open cycle early once price >= buy_price*(1+tp%)
-if getattr(self, "enable_cycle_tp", False) and getattr(self, "cycle_tp_pct", 0.0) > 0:
-    tp_mult = 1.0 + (float(self.cycle_tp_pct) / 100.0)
-    for buy_level, oc in list(self.open_cycles.items()):
-        buy_px = float(oc.buy_price)
-        tp_price = buy_px * tp_mult
-        if price >= tp_price:
-            # Sell the actual cycle amount at current price (market-like in sim)
-            tr = trader.sell(self.symbol, float(price), float(oc.amount), ts, reason="CYCLE_TP")
-            if tr is None:
-                continue
+        # ----------------------------
+        # Per-cycle TP (optional)
+        # ----------------------------
+        if bool(getattr(self, "enable_cycle_tp", False)) and float(getattr(self, "cycle_tp_pct", 0.0)) > 0.0:
+            tp_mult = 1.0 + (float(self.cycle_tp_pct) / 100.0)
+            for buy_level, oc in list(self.open_cycles.items()):
+                tp_price = float(oc.buy_price) * tp_mult
+                if price >= tp_price:
+                    tr = trader.sell(self.symbol, float(price), float(oc.amount), ts, reason="CYCLE_TP")
+                    if tr is None:
+                        continue
 
-            cash_in = tr.cash_delta_quote
-            pnl = cash_in - oc.cash_out
+                    cash_in = float(tr.cash_delta_quote)
+                    pnl = cash_in - float(oc.cash_out)
 
-            self.closed_cycles.append({
-                "symbol": tr.symbol,
-                "buy_time": oc.buy_time, "sell_time": tr.time,
-                "buy_price": oc.buy_price, "sell_price": tr.price,
-                "amount": tr.amount,
-                "cash_out": oc.cash_out, "cash_in": cash_in,
-                "pnl": pnl,
-            })
+                    self.closed_cycles.append({
+                        "symbol": tr.symbol,
+                        "buy_time": oc.buy_time, "sell_time": tr.time,
+                        "buy_price": float(oc.buy_price), "sell_price": float(tr.price),
+                        "amount": float(tr.amount),
+                        "cash_out": float(oc.cash_out), "cash_in": cash_in,
+                        "pnl": pnl,
+                    })
 
-            # Remove pending grid-sell level for this cycle, if present
-            sell_level = self._next(buy_level)
-            if sell_level in self.active_sells:
-                self.active_sells.remove(sell_level)
+                    sell_level = self._next(buy_level)
+                    if sell_level in self.active_sells:
+                        self.active_sells.remove(sell_level)
 
-            # Reactivate buy level for the next cycle
-            self.active_buys.add(buy_level)
+                    self.open_cycles.pop(buy_level, None)
+                    self.active_buys.add(buy_level)
 
-            # Remove open cycle
-            self.open_cycles.pop(buy_level, None)
+                    self.trades.append({
+                        "time": tr.time, "symbol": tr.symbol, "side": tr.side,
+                        "price": float(tr.price), "amount": float(tr.amount),
+                        "fee_rate": float(tr.fee_rate), "fee_paid": float(tr.fee_paid_quote),
+                        "cash_delta": float(tr.cash_delta_quote),
+                        "pnl": pnl,
+                        "reason": tr.reason,
+                    })
 
-            # Log trade row
-            self.trades.append({
-                "time": tr.time, "symbol": tr.symbol, "side": tr.side,
-                "price": tr.price, "amount": tr.amount,
-                "fee_rate": tr.fee_rate, "fee_paid": tr.fee_paid_quote,
-                "cash_delta": tr.cash_delta_quote,
-                "pnl": pnl,
-                "reason": tr.reason,
-            })
-
-# SELL (always allowed)
-for sell in list(self.active_sells):
+        # ----------------------------
+        # SELL (grid target exits)
+        # ----------------------------
+        for sell in list(self.active_sells):
             if price >= sell:
                 buy_level = self._prev(sell)
                 oc = self.open_cycles.pop(buy_level, None)
                 if oc is None:
                     continue
 
-                tr = trader.sell(self.symbol, sell, self.order_size, ts, reason="GRID")
+                tr = trader.sell(self.symbol, float(sell), float(oc.amount), ts, reason="GRID")
                 if tr is None:
+                    # restore if not filled
                     self.open_cycles[buy_level] = oc
                     continue
 
-                cash_in = tr.cash_delta_quote
-                pnl = cash_in - oc.cash_out
+                cash_in = float(tr.cash_delta_quote)
+                pnl = cash_in - float(oc.cash_out)
 
                 self.closed_cycles.append({
                     "symbol": tr.symbol,
                     "buy_time": oc.buy_time, "sell_time": tr.time,
-                    "buy_price": oc.buy_price, "sell_price": tr.price,
-                    "amount": tr.amount,
-                    "cash_out": oc.cash_out, "cash_in": cash_in,
+                    "buy_price": float(oc.buy_price), "sell_price": float(tr.price),
+                    "amount": float(tr.amount),
+                    "cash_out": float(oc.cash_out), "cash_in": cash_in,
                     "pnl": pnl,
                 })
 
@@ -142,15 +168,9 @@ for sell in list(self.active_sells):
 
                 self.trades.append({
                     "time": tr.time, "symbol": tr.symbol, "side": tr.side,
-                    "price": tr.price, "amount": tr.amount,
-                    "fee_rate": tr.fee_rate, "fee_paid": tr.fee_paid_quote,
-                    "cash_delta": tr.cash_delta_quote,
+                    "price": float(tr.price), "amount": float(tr.amount),
+                    "fee_rate": float(tr.fee_rate), "fee_paid": float(tr.fee_paid_quote),
+                    "cash_delta": float(tr.cash_delta_quote),
                     "pnl": pnl,
                     "reason": tr.reason,
                 })
-
-    def _next(self, level):
-        return self.grid[self.grid.index(level) + 1]
-
-    def _prev(self, level):
-        return self.grid[self.grid.index(level) - 1]
