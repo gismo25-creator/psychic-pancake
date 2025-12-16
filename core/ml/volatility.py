@@ -45,3 +45,28 @@ def adx(df: pd.DataFrame, period: int = 14) -> pd.Series:
 
     dx = 100 * (plus_di - minus_di).abs() / (plus_di + minus_di)
     return dx.rolling(period, min_periods=period).mean()
+
+
+def vol_cluster_acf1(df, window: int = 120) -> float:
+    """Volatility clustering proxy: autocorrelation of squared log-returns (lag=1) over a rolling window.
+    Returns the most recent ACF1 value (nan if insufficient data).
+    """
+    import math
+    import pandas as pd
+
+    if df is None or len(df) < max(3, window + 2):
+        return float("nan")
+
+    c = pd.Series(df["close"]).astype(float)
+    lr = (c.apply(lambda x: math.log(x))).diff()
+    sq = lr * lr
+    sq = sq.dropna()
+    if len(sq) < window + 2:
+        return float("nan")
+
+    w = sq.tail(window + 1)  # need lag1
+    x = w.iloc[1:].reset_index(drop=True)
+    y = w.iloc[:-1].reset_index(drop=True)
+    if x.std() == 0 or y.std() == 0:
+        return float("nan")
+    return float(x.corr(y))

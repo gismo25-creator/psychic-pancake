@@ -14,7 +14,7 @@ from core.grid.fibonacci import generate_fibonacci_grid
 from core.grid.engine import GridEngine
 from core.exchange.simulator import PortfolioSimulatorTrader
 
-from core.ml.volatility import atr, realized_vol, bollinger_bandwidth, adx
+from core.ml.volatility import atr, realized_vol, bollinger_bandwidth, adx, vol_cluster_acf1
 from core.ml.regime import classify_regime
 
 
@@ -239,6 +239,13 @@ atr_mult = st.sidebar.slider(
 st.sidebar.subheader("Regime stability")
 cooldown_s = st.sidebar.slider("Cooldown (seconds)", 0, 3600, 300, step=30)
 confirm_n = st.sidebar.slider("Confirmations required", 1, 10, 3)
+# ----------------------------
+# Volatility clustering (metrics)
+# ----------------------------
+st.sidebar.subheader("Volatility clustering (metrics)")
+vc_window = st.sidebar.slider("VC window (candles)", 30, 300, 120, step=10)
+vc_alert = st.sidebar.slider("VC alert threshold (ACF1)", 0.0, 0.99, 0.35, step=0.01)
+
 
 
 # ----------------------------
@@ -342,6 +349,7 @@ dfs: Dict[str, pd.DataFrame] = {}
 last_prices: Dict[str, float] = {}
 last_ts_map: Dict[str, pd.Timestamp] = {}
 atr_abs: Dict[str, float] = {}  # per symbol
+vol_cluster_map: Dict[str, float] = {}  # per symbol
 
 for sym in symbols:
     try:
@@ -380,18 +388,19 @@ def compute_metrics(df: pd.DataFrame, price: float) -> Tuple[float, float, float
 
 
 def apply_hysteresis(symbol: str, raw_regime: str) -> str:
+    now = time.time()
     if symbol not in st.session_state.regime_state:
         st.session_state.regime_state[symbol] = {
             "hist": deque(maxlen=confirm_n),
             "effective": raw_regime,
-            "last_change": 0.0
+            "init_ts": now,
+            "last_change": now
         }
     state = st.session_state.regime_state[symbol]
     if state["hist"].maxlen != confirm_n:
         state["hist"] = deque(list(state["hist"]), maxlen=confirm_n)
 
     state["hist"].append(raw_regime)
-    now = time.time()
     hist = list(state["hist"])
     confirmed = (len(hist) == confirm_n) and all(r == hist[0] for r in hist)
     if confirmed:
@@ -414,6 +423,17 @@ if 'enable_corr_filter' in globals() and enable_corr_filter and len(dfs) >= 2:
             rets[s] = r.tail(corr_window)
     if len(rets) >= 2:
         corr_matrix = pd.DataFrame(rets).corr()
+
+def regime_duration_minutes(symbol: str) -> float:
+    state = st.session_state.regime_state.get(symbol)
+    if not state:
+        return float("nan")
+    lc = float(state.get("last_change", 0.0))
+    if lc <= 0:
+        lc = float(state.get("init_ts", 0.0))
+    if lc <= 0:
+        return float("nan")
+    return (time.time() - lc) / 60.0
 
 # ----------------------------
 # STOP-LOSS CHECKS + PANIC FLATTEN
@@ -561,6 +581,8 @@ for sym, df in dfs.items():
     atr_val, atr_pct, rv_val, bb_val, adx_val, raw_regime = compute_metrics(df, price)
     atr_abs[sym] = atr_val
     eff_regime = apply_hysteresis(sym, raw_regime)
+    vc = vol_cluster_acf1(df, window=int(vc_window))
+    vol_cluster_map[sym] = vc
 
     range_mult = 1.0
     levels_mult = 1.0
@@ -609,6 +631,8 @@ for sym, df in dfs.items():
         "price": price,
         "raw_regime": raw_regime,
         "eff_regime": eff_regime,
+        "regime_dur_min": regime_duration_minutes(sym),
+        "vol_cluster_acf1": float(vol_cluster_map.get(sym, float("nan"))),
         "eff_range_pct": eff_range_pct,
         "levels": eff_levels,
         "order_size": float(eff_order_size),
@@ -646,6 +670,8 @@ if not summary_df.empty:
     ]].copy()
     show["price"] = show["price"].round(2)
     show["eff_range_pct"] = show["eff_range_pct"].round(2)
+    show["regime_dur_min"] = show["regime_dur_min"].astype(float).round(1)
+    show["vol_cluster_acf1"] = show["vol_cluster_acf1"].astype(float).round(2)
     show["pos_base"] = show["pos_base"].astype(float).round(6)
     show["avg_entry"] = show["avg_entry"].astype(float).round(2)
     show["asset_dd_pct"] = show["asset_dd_pct"].astype(float).round(2)
@@ -657,7 +683,9 @@ if not summary_df.empty:
             "closed_pnl": "Realized PnL (EUR)",
             "pos_base": "Pos (base)",
             "asset_dd_pct": "Asset DD (%)",
-            "in_drawdown": "In DD?"
+            "in_drawdown": "In DD?",
+            "regime_dur_min": "Regime duration (min)",
+            "vol_cluster_acf1": "Vol cluster ACF1"
         }),
         width="stretch",
         height=240
