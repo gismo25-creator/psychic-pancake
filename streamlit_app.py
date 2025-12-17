@@ -847,13 +847,13 @@ for i, sym in enumerate(dfs.keys()):
             pair_state = "PAUSED" if is_paused else "ACTIVE"
             global_state = "RUNNING" if st.session_state.trading_enabled else "STOPPED"
             st.caption(f"Pair status: {pair_state}  |  Global trading: {global_state}")
-# --- Range efficiency & streaks quick view ---
-hr_pct = float(pair_summaries.get(sym, {}).get("hit_rate", float("nan"))) * 100.0
-wr_pct = float(pair_summaries.get(sym, {}).get("win_rate", float("nan"))) * 100.0
-st1, st2, st3 = st.columns(3)
-st1.metric("Hit-rate", f"{hr_pct:.1f}%" if not math.isnan(hr_pct) else "—")
-st2.metric("Win-rate", f"{wr_pct:.1f}%" if not math.isnan(wr_pct) else "—")
-st3.metric("Streak", str(pair_summaries.get(sym, {}).get("cur_streak", "—")))
+        # --- Range efficiency & streaks quick view ---
+        hr_pct = float(pair_summaries.get(sym, {}).get("hit_rate", float("nan"))) * 100.0
+        wr_pct = float(pair_summaries.get(sym, {}).get("win_rate", float("nan"))) * 100.0
+        st1, st2, st3 = st.columns(3)
+        st1.metric("Hit-rate", f"{hr_pct:.1f}%" if not math.isnan(hr_pct) else "—")
+        st2.metric("Win-rate", f"{wr_pct:.1f}%" if not math.isnan(wr_pct) else "—")
+        st3.metric("Streak", str(pair_summaries.get(sym, {}).get("cur_streak", "—")))
 
 
         fig = go.Figure(go.Candlestick(
