@@ -1062,16 +1062,16 @@ for i, sym in enumerate(dfs.keys()):
         st1.metric("Hit-rate", f"{hr_pct:.1f}%" if not math.isnan(hr_pct) else "—")
         st2.metric("Win-rate", f"{wr_pct:.1f}%" if not math.isnan(wr_pct) else "—")
         st3.metric("Streak", str(pair_summaries.get(sym, {}).get("cur_streak", "—")))
-sug = st.session_state.opt_suggestions.get(sym)
-if sug:
-    rp = float(sug.get("range_pct", float("nan")))
-    if not math.isnan(rp):
-        lv = sug.get("levels", None)
-        lv_txt = str(lv) if lv is not None else "—"
-        hr_s = float(sug.get("hit_rate", float("nan")))
-        st.caption(
-            f"Suggested grid params: range ±{rp:.2f}% | levels {lv_txt} | hit {hr_s*100.0:.1f}%"
-        )
+        sug = st.session_state.opt_suggestions.get(sym)
+        if sug:
+            rp = float(sug.get("range_pct", float("nan")))
+            if not math.isnan(rp):
+                lv = sug.get("levels", None)
+                lv_txt = str(lv) if lv is not None else "—"
+                hr_s = float(sug.get("hit_rate", float("nan")))
+                st.caption(
+                    f"Suggested grid params: range ±{rp:.2f}% | levels {lv_txt} | hit {hr_s*100.0:.1f}%"
+                )
 
 
 
@@ -1096,6 +1096,45 @@ if sug:
 
         fig.update_layout(height=580, xaxis_rangeslider_visible=False)
         st.plotly_chart(fig, width="stretch")
+        st.subheader("Open cycles / grid state")
+        oc_rows = []
+        for buy_level, oc in eng.open_cycles.items():
+            buy_level = float(buy_level)
+            sell_level = eng._next(buy_level) if buy_level in eng.grid[:-1] else float("nan")
+            tp_price = (
+                float(oc.buy_price) * (1.0 + float(getattr(eng, "cycle_tp_pct", 0.0)) / 100.0)
+                if getattr(eng, "enable_cycle_tp", False)
+                else float("nan")
+            )
+            unreal = (float(price) - float(oc.buy_price)) * float(oc.amount)
+            oc_rows.append({
+                "buy_level": buy_level,
+                "buy_price": float(oc.buy_price),
+                "amount": float(oc.amount),
+                "cash_out": float(oc.cash_out),
+                "sell_level": float(sell_level),
+                "tp_price": (float(tp_price) if not math.isnan(tp_price) else None),
+                "unreal_pnl": float(unreal),
+                "buy_time": oc.buy_time,
+            })
+
+        if oc_rows:
+            ocd = pd.DataFrame(oc_rows).sort_values("buy_time", ascending=False)
+            ocd["buy_level"] = ocd["buy_level"].round(2)
+            ocd["buy_price"] = ocd["buy_price"].round(2)
+            ocd["sell_level"] = ocd["sell_level"].round(2)
+            if "tp_price" in ocd.columns:
+                ocd["tp_price"] = pd.to_numeric(ocd["tp_price"], errors="coerce").round(2)
+            ocd["amount"] = ocd["amount"].round(6)
+            ocd["cash_out"] = ocd["cash_out"].round(2)
+            ocd["unreal_pnl"] = ocd["unreal_pnl"].round(2)
+            st.dataframe(ocd, width="stretch", height=220)
+        else:
+            st.caption("No open cycles for this pair.")
+
+        st.caption(
+            f"Grid state: active buys={len(eng.active_buys)} | active sells={len(eng.active_sells)} | open cycles={len(eng.open_cycles)}"
+        )
 
         st.subheader("Trades (executed, exact realized PnL on SELL)")
         if eng.trades:
