@@ -280,14 +280,13 @@ def default_cfg(sym: str):
         "cycle_tp_pct": 0.35,
         "auto_optimize": False,
         "opt_target_hit": 0.40,
-        "opt_min_range_pct": 0.3,
-        "opt_max_range_pct": 8.0,
+        "opt_min_range_pct": 0.30,
+        "opt_max_range_pct": 8.00,
         "opt_min_levels": 5,
         "opt_max_levels": 25,
         "enable_dyn_os_mult": False,
-        "dyn_os_min_mult": 0.3,
-        "dyn_os_max_mult": 1.5,
-
+        "dyn_os_min_mult": 0.30,
+        "dyn_os_max_mult": 1.50,
     }
 
 for sym in symbols:
@@ -316,32 +315,6 @@ for sym in symbols:
             cfg["base_levels"] = st.slider(
                 f"{sym} base levels", 3, 30, int(cfg["base_levels"]), key=f"{sym}_levels"
             )
-        cfg["auto_optimize"] = st.checkbox(
-            f"{sym} Auto-optimize grid range/levels", value=bool(cfg.get("auto_optimize", False)), key=f"{sym}_autoopt"
-        )
-        cfg["opt_target_hit"] = st.slider(
-            f"{sym} Target hit-rate", 0.10, 0.90, float(cfg.get("opt_target_hit", 0.40)), step=0.05,
-            disabled=(not bool(cfg.get("auto_optimize", False))), key=f"{sym}_opt_hit"
-        )
-        opt_apply = st.button(
-            f"Apply suggested params for {sym}",
-            key=f"{sym}_opt_apply",
-            disabled=(not bool(cfg.get("auto_optimize", False)))
-        )
-        if opt_apply:
-            st.session_state[f"apply_opt_{sym}"] = True
-
-        cfg["enable_dyn_os_mult"] = st.checkbox(
-            f"{sym} Dynamic order-size multiplier", value=bool(cfg.get("enable_dyn_os_mult", False)), key=f"{sym}_dynos"
-        )
-        cfg["dyn_os_min_mult"] = st.slider(
-            f"{sym} Dyn size min mult", 0.1, 1.0, float(cfg.get("dyn_os_min_mult", 0.3)), step=0.05,
-            disabled=(not bool(cfg.get("enable_dyn_os_mult", False))), key=f"{sym}_dynos_min"
-        )
-        cfg["dyn_os_max_mult"] = st.slider(
-            f"{sym} Dyn size max mult", 1.0, 3.0, float(cfg.get("dyn_os_max_mult", 1.5)), step=0.1,
-            disabled=(not bool(cfg.get("enable_dyn_os_mult", False))), key=f"{sym}_dynos_max"
-        )
         cfg["order_size"] = st.number_input(
             f"{sym} order size (base)", value=float(cfg["order_size"]),
             min_value=0.0, format="%.6f", key=f"{sym}_osize"
@@ -354,6 +327,48 @@ for sym in symbols:
             disabled=(not bool(cfg.get("enable_cycle_tp", False))), key=f"{sym}_ctp_pct"
         )
 
+
+st.markdown("---")
+cfg["auto_optimize"] = st.checkbox(
+    f"{sym} Auto-optimize grid range/levels",
+    value=bool(cfg.get("auto_optimize", False)),
+    key=f"{sym}_autoopt",
+)
+cfg["opt_target_hit"] = st.slider(
+    f"{sym} Target hit-rate",
+    0.10, 0.90, float(cfg.get("opt_target_hit", 0.40)),
+    step=0.05,
+    disabled=(not bool(cfg.get("auto_optimize", False))),
+    key=f"{sym}_opt_hit",
+)
+opt_apply = st.button(
+    f"Apply suggested params for {sym}",
+    key=f"{sym}_opt_apply",
+    disabled=(not bool(cfg.get("auto_optimize", False))),
+    help="Applies the suggested range/levels to this pair's config."
+)
+if opt_apply:
+    st.session_state[f"apply_opt_{sym}"] = True
+
+cfg["enable_dyn_os_mult"] = st.checkbox(
+    f"{sym} Dynamic order-size multiplier",
+    value=bool(cfg.get("enable_dyn_os_mult", False)),
+    key=f"{sym}_dynos",
+)
+cfg["dyn_os_min_mult"] = st.slider(
+    f"{sym} Dyn size min mult",
+    0.1, 1.0, float(cfg.get("dyn_os_min_mult", 0.30)),
+    step=0.05,
+    disabled=(not bool(cfg.get("enable_dyn_os_mult", False))),
+    key=f"{sym}_dynos_min",
+)
+cfg["dyn_os_max_mult"] = st.slider(
+    f"{sym} Dyn size max mult",
+    1.0, 3.0, float(cfg.get("dyn_os_max_mult", 1.50)),
+    step=0.10,
+    disabled=(not bool(cfg.get("enable_dyn_os_mult", False))),
+    key=f"{sym}_dynos_max",
+)
 
 # ----------------------------
 # Initialize portfolio trader
@@ -576,36 +591,56 @@ def compute_streaks(pnls):
     }
 
 
-def propose_grid_params(df: pd.DataFrame, price: float, atr_val: float, grid_type: str,
-                        min_range_pct: float, max_range_pct: float,
-                        min_levels: int, max_levels: int,
-                        target_hit: float, window_candles: int):
-    """Heuristic optimizer for grid range and (linear) levels."""
+def propose_grid_params(
+    df: pd.DataFrame,
+    price: float,
+    atr_val: float,
+    grid_type: str,
+    min_range_pct: float,
+    max_range_pct: float,
+    min_levels: int,
+    max_levels: int,
+    target_hit: float,
+    window_candles: int,
+):
+    """Heuristic suggestion for grid range (±%) and (for Linear) number of levels.
+
+    Objective:
+    - Achieve a target grid "hit-rate" over the last N candles.
+    - Keep spacing reasonable vs ATR (avoid too-tight/too-wide grids).
+    - Avoid excessive levels (complexity penalty).
+
+    Returns: (range_pct, levels_or_None, hit_rate, spacing_to_atr)
+    """
     if df is None or df.empty:
         return float("nan"), None, float("nan"), float("nan")
 
     price = float(price)
     atr_val = float(atr_val) if atr_val is not None else float("nan")
+    target_hit = float(target_hit)
 
+    # Candidate ranges (coarse-to-fine)
     rngs = []
     r = float(min_range_pct)
     while r <= float(max_range_pct) + 1e-9:
         rngs.append(round(r, 2))
         r += 0.25 if r < 2.0 else (0.5 if r < 5.0 else 1.0)
 
-    if grid_type != "Linear":
+    if str(grid_type) != "Linear":
+        # Fibonacci: optimize range only
         best = (float("inf"), float("nan"), None, float("nan"), float("nan"))
         for rp in rngs:
             lo = price * (1.0 - rp / 100.0)
             hi = price * (1.0 + rp / 100.0)
             grid = generate_fibonacci_grid(lo, hi)
-            hr = compute_grid_hit_rate(df, grid, window_candles=window_candles)
-            score = abs(float(hr) - float(target_hit)) if not math.isnan(hr) else 9e9
+            hr = compute_grid_hit_rate(df, grid, window_candles=int(window_candles))
+            score = abs(float(hr) - target_hit) if not math.isnan(hr) else 9e9
             if score < best[0]:
                 best = (score, rp, None, hr, float("nan"))
         return best[1], best[2], best[3], best[4]
 
-    levels_list = list(range(int(min_levels), int(max_levels) + 1, 1))
+    # Linear: optimize range + levels
+    levels_list = list(range(int(min_levels), int(max_levels) + 1))
     best = (float("inf"), float("nan"), None, float("nan"), float("nan"))
 
     for rp in rngs:
@@ -617,33 +652,50 @@ def propose_grid_params(df: pd.DataFrame, price: float, atr_val: float, grid_typ
             if lv < 3:
                 continue
             spacing = width / float(lv - 1)
+
+            # ATR spacing penalty
+            s2a = float("nan")
+            pen = 0.0
             if (not math.isnan(atr_val)) and atr_val > 0:
                 s2a = spacing / atr_val
-                pen = 0.0
                 if s2a < 0.35:
                     pen += (0.35 - s2a) * 2.0
                 if s2a > 2.5:
                     pen += (s2a - 2.5) * 1.0
             else:
-                s2a = float("nan")
-                pen = 0.25
+                pen += 0.25
 
-            grid = generate_linear_grid(lo, hi, lv)
-            hr = compute_grid_hit_rate(df, grid, window_candles=window_candles)
+            grid = generate_linear_grid(lo, hi, int(lv))
+            hr = compute_grid_hit_rate(df, grid, window_candles=int(window_candles))
             if math.isnan(hr):
                 continue
 
-            complexity = max(0.0, (lv - 12) / 20.0)
-            score = abs(float(hr) - float(target_hit)) + pen + complexity
+            complexity = max(0.0, (float(lv) - 12.0) / 20.0)
+            score = abs(float(hr) - target_hit) + pen + complexity
+
             if score < best[0]:
-                best = (score, rp, lv, hr, s2a)
+                best = (score, rp, int(lv), hr, s2a)
 
     return best[1], best[2], best[3], best[4]
 
-def dyn_order_size_multiplier(eff_regime: str, hit_rate: float, vol_cluster: float,
-                              min_mult: float, max_mult: float) -> float:
-    """Dynamic order size multiplier (risk-aware)."""
+
+def dyn_order_size_multiplier(
+    eff_regime: str,
+    hit_rate: float,
+    vol_cluster: float,
+    min_mult: float,
+    max_mult: float,
+) -> float:
+    """Dynamic order size multiplier (risk-aware heuristic).
+
+    - Reduce size in CHAOS and when volatility clustering is high.
+    - Slightly reduce in TREND (avoid pyramiding trend risk).
+    - Slightly increase in RANGE when hit-rate is healthy.
+
+    Returns a clamped multiplier in [min_mult, max_mult].
+    """
     m = 1.0
+
     if eff_regime == "CHAOS":
         m *= 0.60
     elif eff_regime == "TREND":
@@ -652,6 +704,7 @@ def dyn_order_size_multiplier(eff_regime: str, hit_rate: float, vol_cluster: flo
         m *= 1.10
 
     if (not math.isnan(vol_cluster)) and vol_cluster >= 0.35:
+        # stronger clustering => smaller size
         m *= max(0.5, 1.0 - min(0.5, (vol_cluster - 0.35)))
 
     if not math.isnan(hit_rate):
@@ -810,30 +863,163 @@ for sym, df in dfs.items():
     atr_val, atr_pct, rv_val, bb_val, adx_val, raw_regime = compute_metrics(df, price)
     atr_abs[sym] = atr_val
     eff_regime = apply_hysteresis(sym, raw_regime)
-    # --- Grid parameter suggestion (range/levels) ---
-    if bool(cfg.get('auto_optimize', False)):
-        sug_range, sug_levels, sug_hr, sug_s2a = propose_grid_params(
-            df=df, price=price, atr_val=atr_val, grid_type=str(cfg.get('grid_type', 'Linear')),
-            min_range_pct=float(cfg.get('opt_min_range_pct', 0.3)), max_range_pct=float(cfg.get('opt_max_range_pct', 8.0)),
-            min_levels=int(cfg.get('opt_min_levels', 5)), max_levels=int(cfg.get('opt_max_levels', 25)),
-            target_hit=float(cfg.get('opt_target_hit', 0.40)), window_candles=int(hit_window) if 'hit_window' in globals() else 150,
-        )
-        st.session_state.opt_suggestions[sym] = {
-            'range_pct': sug_range, 'levels': sug_levels, 'hit_rate': sug_hr, 'spacing_to_atr': sug_s2a
-        }
-    else:
-        st.session_state.opt_suggestions.pop(sym, None)
     vc = vol_cluster_acf1(df, window=int(vc_window))
     vol_cluster_map[sym] = vc
 
-    # Apply suggested params if requested
-    if st.session_state.get(f"apply_opt_{sym}", False):
-        sug = st.session_state.opt_suggestions.get(sym)
-        if sug and (not math.isnan(float(sug.get("range_pct", float("nan"))))):
-            lv_txt = str(sug.get("levels")) if sug.get("levels") is not None else "—"
-            st.caption(
-                f"Suggested grid params: range ±{float(sug['range_pct']):.2f}% | levels {lv_txt} | hit {float(sug.get('hit_rate', float('nan')))*100:.1f}%"
-            )
+    range_mult = 1.0
+    levels_mult = 1.0
+    if cfg["dynamic_spacing"] and eff_regime != "WARMUP":
+        if eff_regime == "TREND":
+            range_mult = cfg["k_range"]
+            levels_mult = cfg["k_levels"]
+        elif eff_regime == "CHAOS":
+            range_mult = cfg["k_range"] * 1.5
+            levels_mult = max(0.3, cfg["k_levels"] * 0.7)
+
+    atr_floor_pct = 0.0
+    if cfg["dynamic_spacing"] and not math.isnan(atr_pct):
+        atr_floor_pct = max(0.0, 3.0 * atr_pct * 100.0)
+
+    eff_range_pct = max(cfg["base_range_pct"] * range_mult, atr_floor_pct) if cfg["dynamic_spacing"] else cfg["base_range_pct"]
+    lower = price * (1 - eff_range_pct / 100.0)
+    upper = price * (1 + eff_range_pct / 100.0)
+
+    if cfg["grid_type"] == "Linear":
+        eff_levels = cfg["base_levels"] if not cfg["dynamic_spacing"] else max(3, int(round(cfg["base_levels"] * levels_mult)))
+        grid = generate_linear_grid(lower, upper, eff_levels)
+    else:
+        eff_levels = None
+        grid = generate_fibonacci_grid(lower, upper)
+
+    sig = (sym, timeframe, cfg["grid_type"], round(lower, 2), round(upper, 2), len(grid), float(cfg["order_size"]), bool(cfg.get("enable_cycle_tp", False)), float(cfg.get("cycle_tp_pct", 0.35)))
+    if sym not in st.session_state.engines or getattr(st.session_state.engines[sym], "_signature", None) != sig:
+        eng = GridEngine(sym, grid, cfg["order_size"])
+        eng._signature = sig
+        st.session_state.engines[sym] = eng
+
+    eng: GridEngine = st.session_state.engines[sym]
+    # --- Range efficiency (hit-rate) ---
+    hr = compute_grid_hit_rate(df, grid, window_candles=int(hit_window)) if "hit_window" in globals() else float("nan")
+    st.session_state.last_hit_rate[sym] = float(hr)
+
+    # --- Order size scaling (dynamic multiplier) ---
+    dyn_mult = 1.0
+    if bool(cfg.get("enable_dyn_os_mult", False)):
+        dyn_mult = dyn_order_size_multiplier(
+            eff_regime=str(eff_regime),
+            hit_rate=float(hr),
+            vol_cluster=float(vc),
+            min_mult=float(cfg.get("dyn_os_min_mult", 0.30)),
+            max_mult=float(cfg.get("dyn_os_max_mult", 1.50)),
+        )
+
+    eng.order_size = float(eff_order_size) * float(dyn_mult)
+
+    eng.enable_cycle_tp = bool(cfg.get("enable_cycle_tp", False))
+    eng.cycle_tp_pct = float(cfg.get("cycle_tp_pct", 0.35))
+
+    base = sym.split("/")[0]
+    allow_buys = global_allow_buys and (base not in st.session_state.asset_halt)
+
+    pair_is_paused = sym in st.session_state.pair_paused
+    if st.session_state.trading_enabled and (not pair_is_paused):
+        eng.check_price(price, trader, ts, allow_buys=allow_buys, buy_guard=buy_guard)
+
+    # --- Range efficiency & streaks ---
+    pnls = [c.get('pnl', 0.0) for c in eng.closed_cycles]
+    if 'streak_scope' in globals():
+        pnls = pnls[-int(streak_scope):]
+    streak = compute_streaks(pnls)
+
+    pair_summaries[sym] = {
+        "price": price,
+        "raw_regime": raw_regime,
+        "eff_regime": eff_regime,
+        "regime_dur_min": regime_duration_minutes(sym),
+        "vol_cluster_acf1": float(vol_cluster_map.get(sym, float("nan"))),
+        "hit_rate": float(hr),
+        "dyn_os_mult": float(dyn_mult),
+        "win_rate": float(streak["win_rate"]),
+        "cur_streak": f"{streak['cur_streak_type']} {streak['cur_streak_len']}",
+        "max_win_streak": int(streak["max_win_streak"]),
+        "max_loss_streak": int(streak["max_loss_streak"]),
+        "hit_rate": float(hr),
+        "win_rate": float(streak["win_rate"]),
+        "cur_streak": f"{streak['cur_streak_type']} {streak['cur_streak_len']}",
+        "max_win_streak": int(streak["max_win_streak"]),
+        "max_loss_streak": int(streak["max_loss_streak"]),
+        "eff_range_pct": eff_range_pct,
+        "levels": eff_levels,
+        "order_size": float(eff_order_size),
+        "cycle_tp_on": bool(cfg.get("enable_cycle_tp", False)),
+        "cycle_tp_pct": float(cfg.get("cycle_tp_pct", 0.35)) if bool(cfg.get("enable_cycle_tp", False)) else 0.0,
+        "pos_base": trader.positions.get(base, 0.0),
+        "avg_entry": trader.avg_entry_price(base),
+        "closed_pnl": sum(c["pnl"] for c in eng.closed_cycles),
+        "trades": len(eng.trades),
+        "halted": base in st.session_state.asset_halt,
+        "paused": pair_is_paused,
+        "asset_dd_pct": float(asset_dd.get(base, 0.0)),
+        "in_drawdown": base in assets_in_dd,
+    }
+
+# ----------------------------
+# Portfolio header
+# ----------------------------
+st.subheader("Portfolio")
+colA, colB, colC, colD, colE = st.columns(5)
+colA.metric("Cash (EUR)", f"{trader.cash:.2f}")
+colB.metric("Equity (EUR)", f"{eq:.2f}")
+colC.metric("Peak equity (EUR)", f"{peak:.2f}")
+colD.metric("Drawdown", f"{dd*100:.2f}%")
+colE.metric("Portfolio stop", "ACTIVE" if st.session_state.portfolio_stop_active else "—")
+
+if st.session_state.asset_halt:
+    st.warning(f"Asset halt active (no new buys): {', '.join(sorted(st.session_state.asset_halt))}")
+
+summary_df = pd.DataFrame([{"symbol": k, **v} for k, v in pair_summaries.items()]).sort_values("symbol")
+if not summary_df.empty:
+    # Defensive: ensure optional ML columns exist (older session states / partial data)
+    for col in ["regime_dur_min", "vol_cluster_acf1", "hit_rate", "win_rate", "cur_streak", "max_win_streak", "max_loss_streak", "dyn_os_mult"]:
+        if col not in summary_df.columns:
+            summary_df[col] = float("nan")
+
+    cols = [
+        "symbol", "price", "eff_regime", "regime_dur_min", "vol_cluster_acf1", "hit_rate", "win_rate", "cur_streak",
+        "eff_range_pct", "levels", "order_size", "dyn_os_mult",
+        "pos_base", "avg_entry", "asset_dd_pct", "in_drawdown", "halted", "paused", "closed_pnl", "trades"
+    ]
+    show = summary_df.reindex(columns=cols).copy()
+
+    show["price"] = show["price"].round(2)
+    show["eff_range_pct"] = show["eff_range_pct"].round(2)
+    show["regime_dur_min"] = show["regime_dur_min"].astype(float).round(1)
+    show["vol_cluster_acf1"] = show["vol_cluster_acf1"].astype(float).round(2)
+    show["hit_rate"] = (show["hit_rate"].astype(float) * 100.0).round(1)
+    show["win_rate"] = (show["win_rate"].astype(float) * 100.0).round(1)
+    show["pos_base"] = show["pos_base"].astype(float).round(6)
+    show["avg_entry"] = show["avg_entry"].astype(float).round(2)
+    show["dyn_os_mult"] = show["dyn_os_mult"].astype(float).round(2)
+    show["asset_dd_pct"] = show["asset_dd_pct"].astype(float).round(2)
+    show["closed_pnl"] = show["closed_pnl"].round(2)
+
+    st.dataframe(
+        show.rename(columns={
+            "eff_range_pct": "Eff range ± (%)",
+            "closed_pnl": "Realized PnL (EUR)",
+            "pos_base": "Pos (base)",
+            "asset_dd_pct": "Asset DD (%)",
+            "in_drawdown": "In DD?",
+            "regime_dur_min": "Regime duration (min)",
+            "vol_cluster_acf1": "Vol cluster ACF1"
+        }),
+        width="stretch",
+        height=240
+    )
+
+with st.expander("Correlation matrix (rolling)", expanded=False):
+    if corr_matrix is None:
+        st.caption("Correlation filter disabled or insufficient data.")
     else:
         st.dataframe(corr_matrix.round(2), width="stretch", height=220)
 
@@ -846,6 +1032,10 @@ for i, sym in enumerate(dfs.keys()):
     with tabs[i]:
         df = dfs[sym]
         price = last_prices[sym]
+        if sym not in st.session_state.engines:
+            st.warning("Engine not initialized for this pair (data/initialization issue).")
+            continue
+
         eng: GridEngine = st.session_state.engines[sym]
         grid = eng.grid
         base = sym.split("/")[0]
@@ -872,12 +1062,16 @@ for i, sym in enumerate(dfs.keys()):
         st1.metric("Hit-rate", f"{hr_pct:.1f}%" if not math.isnan(hr_pct) else "—")
         st2.metric("Win-rate", f"{wr_pct:.1f}%" if not math.isnan(wr_pct) else "—")
         st3.metric("Streak", str(pair_summaries.get(sym, {}).get("cur_streak", "—")))
-        sug = st.session_state.opt_suggestions.get(sym)
-        if sug and (not math.isnan(float(sug.get("range_pct", float("nan"))))):
-            lv_txt = str(sug.get("levels")) if sug.get("levels") is not None else "—"
-            st.caption(
-                f"Suggested grid params: range ±{float(sug['range_pct']):.2f}% | levels {lv_txt} | hit {float(sug.get('hit_rate', float('nan')))*100:.1f}%"
-            )
+sug = st.session_state.opt_suggestions.get(sym)
+if sug:
+    rp = float(sug.get("range_pct", float("nan")))
+    if not math.isnan(rp):
+        lv = sug.get("levels", None)
+        lv_txt = str(lv) if lv is not None else "—"
+        hr_s = float(sug.get("hit_rate", float("nan")))
+        st.caption(
+            f"Suggested grid params: range ±{rp:.2f}% | levels {lv_txt} | hit {hr_s*100.0:.1f}%"
+        )
 
 
 
