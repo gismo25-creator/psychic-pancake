@@ -245,13 +245,6 @@ confirm_n = st.sidebar.slider("Confirmations required", 1, 10, 3)
 st.sidebar.subheader("Volatility clustering (metrics)")
 vc_window = st.sidebar.slider("VC window (candles)", 30, 300, 120, step=10)
 vc_alert = st.sidebar.slider("VC alert threshold (ACF1)", 0.0, 0.99, 0.35, step=0.01)
-# ----------------------------
-# Range efficiency & streaks (metrics)
-# ----------------------------
-st.sidebar.subheader("Range efficiency & streaks (metrics)")
-hit_window = st.sidebar.slider("Hit-rate window (candles)", 20, 500, 150, step=10)
-streak_scope = st.sidebar.slider("Streak scope (closed cycles)", 20, 2000, 300, step=20)
-
 
 
 
@@ -259,11 +252,6 @@ streak_scope = st.sidebar.slider("Streak scope (closed cycles)", 20, 2000, 300, 
 # Per-pair grid settings
 # ----------------------------
 st.sidebar.subheader("Per-pair grid settings")
-if "opt_suggestions" not in st.session_state:
-    st.session_state.opt_suggestions = {}
-if "last_hit_rate" not in st.session_state:
-    st.session_state.last_hit_rate = {}
-
 if "pair_cfg" not in st.session_state:
     st.session_state.pair_cfg = {}
 
@@ -278,15 +266,6 @@ def default_cfg(sym: str):
         "order_size": 0.001,
         "enable_cycle_tp": False,
         "cycle_tp_pct": 0.35,
-        "auto_optimize": False,
-        "opt_target_hit": 0.40,
-        "opt_min_range_pct": 0.30,
-        "opt_max_range_pct": 8.00,
-        "opt_min_levels": 5,
-        "opt_max_levels": 25,
-        "enable_dyn_os_mult": False,
-        "dyn_os_min_mult": 0.30,
-        "dyn_os_max_mult": 1.50,
     }
 
 for sym in symbols:
@@ -327,48 +306,6 @@ for sym in symbols:
             disabled=(not bool(cfg.get("enable_cycle_tp", False))), key=f"{sym}_ctp_pct"
         )
 
-
-st.markdown("---")
-cfg["auto_optimize"] = st.checkbox(
-    f"{sym} Auto-optimize grid range/levels",
-    value=bool(cfg.get("auto_optimize", False)),
-    key=f"{sym}_autoopt",
-)
-cfg["opt_target_hit"] = st.slider(
-    f"{sym} Target hit-rate",
-    0.10, 0.90, float(cfg.get("opt_target_hit", 0.40)),
-    step=0.05,
-    disabled=(not bool(cfg.get("auto_optimize", False))),
-    key=f"{sym}_opt_hit",
-)
-opt_apply = st.button(
-    f"Apply suggested params for {sym}",
-    key=f"{sym}_opt_apply",
-    disabled=(not bool(cfg.get("auto_optimize", False))),
-    help="Applies the suggested range/levels to this pair's config."
-)
-if opt_apply:
-    st.session_state[f"apply_opt_{sym}"] = True
-
-cfg["enable_dyn_os_mult"] = st.checkbox(
-    f"{sym} Dynamic order-size multiplier",
-    value=bool(cfg.get("enable_dyn_os_mult", False)),
-    key=f"{sym}_dynos",
-)
-cfg["dyn_os_min_mult"] = st.slider(
-    f"{sym} Dyn size min mult",
-    0.1, 1.0, float(cfg.get("dyn_os_min_mult", 0.30)),
-    step=0.05,
-    disabled=(not bool(cfg.get("enable_dyn_os_mult", False))),
-    key=f"{sym}_dynos_min",
-)
-cfg["dyn_os_max_mult"] = st.slider(
-    f"{sym} Dyn size max mult",
-    1.0, 3.0, float(cfg.get("dyn_os_max_mult", 1.50)),
-    step=0.10,
-    disabled=(not bool(cfg.get("enable_dyn_os_mult", False))),
-    key=f"{sym}_dynos_max",
-)
 
 # ----------------------------
 # Initialize portfolio trader
@@ -497,225 +434,6 @@ def regime_duration_minutes(symbol: str) -> float:
     if lc <= 0:
         return float("nan")
     return (time.time() - lc) / 60.0
-
-def compute_grid_hit_rate(df: pd.DataFrame, grid_levels, window_candles: int) -> float:
-    """Range efficiency proxy: % of grid levels that were 'touched' by candle ranges in last window."""
-    if df is None or df.empty or not grid_levels:
-        return float("nan")
-    w = int(max(1, window_candles))
-    d = df.tail(w)
-    if d.empty:
-        return float("nan")
-    levels = [float(x) for x in grid_levels]
-    hits = set()
-    # Candle 'touch' if level between low and high
-    lows = d["low"].astype(float).to_numpy()
-    highs = d["high"].astype(float).to_numpy()
-    for lvl in levels:
-        # vectorized-ish check
-        for lo, hi in zip(lows, highs):
-            if lo <= lvl <= hi:
-                hits.add(lvl)
-                break
-    return float(len(hits) / max(1, len(levels)))
-
-def compute_streaks(pnls):
-    """Compute win/loss streak metrics from a list of realized PnL values (chronological)."""
-    # classify: +1 win, -1 loss, 0 neutral
-    cls = []
-    for p in pnls:
-        try:
-            v = float(p)
-        except Exception:
-            continue
-        if v > 1e-12:
-            cls.append(1)
-        elif v < -1e-12:
-            cls.append(-1)
-        else:
-            cls.append(0)
-
-    # win rate (exclude zeros)
-    nz = [c for c in cls if c != 0]
-    wins = sum(1 for c in nz if c == 1)
-    losses = sum(1 for c in nz if c == -1)
-    win_rate = float(wins / (wins + losses)) if (wins + losses) > 0 else float("nan")
-
-    # streaks
-    cur_type = 0
-    cur_len = 0
-    max_win = 0
-    max_loss = 0
-
-    def update_max(t, l):
-        nonlocal max_win, max_loss
-        if t == 1:
-            max_win = max(max_win, l)
-        elif t == -1:
-            max_loss = max(max_loss, l)
-
-    for c in cls:
-        if c == 0:
-            update_max(cur_type, cur_len)
-            cur_type, cur_len = 0, 0
-            continue
-        if c == cur_type:
-            cur_len += 1
-        else:
-            update_max(cur_type, cur_len)
-            cur_type, cur_len = c, 1
-    update_max(cur_type, cur_len)
-
-    # current streak from the end
-    end_type = 0
-    end_len = 0
-    for c in reversed(cls):
-        if c == 0:
-            break
-        if end_type == 0:
-            end_type = c
-            end_len = 1
-        elif c == end_type:
-            end_len += 1
-        else:
-            break
-
-    return {
-        "win_rate": win_rate,
-        "wins": wins,
-        "losses": losses,
-        "cur_streak_type": "WIN" if end_type == 1 else ("LOSS" if end_type == -1 else "—"),
-        "cur_streak_len": int(end_len),
-        "max_win_streak": int(max_win),
-        "max_loss_streak": int(max_loss),
-    }
-
-
-def propose_grid_params(
-    df: pd.DataFrame,
-    price: float,
-    atr_val: float,
-    grid_type: str,
-    min_range_pct: float,
-    max_range_pct: float,
-    min_levels: int,
-    max_levels: int,
-    target_hit: float,
-    window_candles: int,
-):
-    """Heuristic suggestion for grid range (±%) and (for Linear) number of levels.
-
-    Objective:
-    - Achieve a target grid "hit-rate" over the last N candles.
-    - Keep spacing reasonable vs ATR (avoid too-tight/too-wide grids).
-    - Avoid excessive levels (complexity penalty).
-
-    Returns: (range_pct, levels_or_None, hit_rate, spacing_to_atr)
-    """
-    if df is None or df.empty:
-        return float("nan"), None, float("nan"), float("nan")
-
-    price = float(price)
-    atr_val = float(atr_val) if atr_val is not None else float("nan")
-    target_hit = float(target_hit)
-
-    # Candidate ranges (coarse-to-fine)
-    rngs = []
-    r = float(min_range_pct)
-    while r <= float(max_range_pct) + 1e-9:
-        rngs.append(round(r, 2))
-        r += 0.25 if r < 2.0 else (0.5 if r < 5.0 else 1.0)
-
-    if str(grid_type) != "Linear":
-        # Fibonacci: optimize range only
-        best = (float("inf"), float("nan"), None, float("nan"), float("nan"))
-        for rp in rngs:
-            lo = price * (1.0 - rp / 100.0)
-            hi = price * (1.0 + rp / 100.0)
-            grid = generate_fibonacci_grid(lo, hi)
-            hr = compute_grid_hit_rate(df, grid, window_candles=int(window_candles))
-            score = abs(float(hr) - target_hit) if not math.isnan(hr) else 9e9
-            if score < best[0]:
-                best = (score, rp, None, hr, float("nan"))
-        return best[1], best[2], best[3], best[4]
-
-    # Linear: optimize range + levels
-    levels_list = list(range(int(min_levels), int(max_levels) + 1))
-    best = (float("inf"), float("nan"), None, float("nan"), float("nan"))
-
-    for rp in rngs:
-        lo = price * (1.0 - rp / 100.0)
-        hi = price * (1.0 + rp / 100.0)
-        width = hi - lo
-
-        for lv in levels_list:
-            if lv < 3:
-                continue
-            spacing = width / float(lv - 1)
-
-            # ATR spacing penalty
-            s2a = float("nan")
-            pen = 0.0
-            if (not math.isnan(atr_val)) and atr_val > 0:
-                s2a = spacing / atr_val
-                if s2a < 0.35:
-                    pen += (0.35 - s2a) * 2.0
-                if s2a > 2.5:
-                    pen += (s2a - 2.5) * 1.0
-            else:
-                pen += 0.25
-
-            grid = generate_linear_grid(lo, hi, int(lv))
-            hr = compute_grid_hit_rate(df, grid, window_candles=int(window_candles))
-            if math.isnan(hr):
-                continue
-
-            complexity = max(0.0, (float(lv) - 12.0) / 20.0)
-            score = abs(float(hr) - target_hit) + pen + complexity
-
-            if score < best[0]:
-                best = (score, rp, int(lv), hr, s2a)
-
-    return best[1], best[2], best[3], best[4]
-
-
-def dyn_order_size_multiplier(
-    eff_regime: str,
-    hit_rate: float,
-    vol_cluster: float,
-    min_mult: float,
-    max_mult: float,
-) -> float:
-    """Dynamic order size multiplier (risk-aware heuristic).
-
-    - Reduce size in CHAOS and when volatility clustering is high.
-    - Slightly reduce in TREND (avoid pyramiding trend risk).
-    - Slightly increase in RANGE when hit-rate is healthy.
-
-    Returns a clamped multiplier in [min_mult, max_mult].
-    """
-    m = 1.0
-
-    if eff_regime == "CHAOS":
-        m *= 0.60
-    elif eff_regime == "TREND":
-        m *= 0.80
-    elif eff_regime == "RANGE":
-        m *= 1.10
-
-    if (not math.isnan(vol_cluster)) and vol_cluster >= 0.35:
-        # stronger clustering => smaller size
-        m *= max(0.5, 1.0 - min(0.5, (vol_cluster - 0.35)))
-
-    if not math.isnan(hit_rate):
-        if hit_rate < 0.20:
-            m *= 0.70
-        elif hit_rate > 0.55:
-            m *= 1.10
-
-    m = float(max(float(min_mult), min(float(max_mult), m)))
-    return m
-
 
 # ----------------------------
 # STOP-LOSS CHECKS + PANIC FLATTEN
@@ -898,23 +616,7 @@ for sym, df in dfs.items():
         st.session_state.engines[sym] = eng
 
     eng: GridEngine = st.session_state.engines[sym]
-    # --- Range efficiency (hit-rate) ---
-    hr = compute_grid_hit_rate(df, grid, window_candles=int(hit_window)) if "hit_window" in globals() else float("nan")
-    st.session_state.last_hit_rate[sym] = float(hr)
-
-    # --- Order size scaling (dynamic multiplier) ---
-    dyn_mult = 1.0
-    if bool(cfg.get("enable_dyn_os_mult", False)):
-        dyn_mult = dyn_order_size_multiplier(
-            eff_regime=str(eff_regime),
-            hit_rate=float(hr),
-            vol_cluster=float(vc),
-            min_mult=float(cfg.get("dyn_os_min_mult", 0.30)),
-            max_mult=float(cfg.get("dyn_os_max_mult", 1.50)),
-        )
-
-    eng.order_size = float(eff_order_size) * float(dyn_mult)
-
+    eng.order_size = float(eff_order_size)
     eng.enable_cycle_tp = bool(cfg.get("enable_cycle_tp", False))
     eng.cycle_tp_pct = float(cfg.get("cycle_tp_pct", 0.35))
 
@@ -925,29 +627,12 @@ for sym, df in dfs.items():
     if st.session_state.trading_enabled and (not pair_is_paused):
         eng.check_price(price, trader, ts, allow_buys=allow_buys, buy_guard=buy_guard)
 
-    # --- Range efficiency & streaks ---
-    pnls = [c.get('pnl', 0.0) for c in eng.closed_cycles]
-    if 'streak_scope' in globals():
-        pnls = pnls[-int(streak_scope):]
-    streak = compute_streaks(pnls)
-
     pair_summaries[sym] = {
         "price": price,
         "raw_regime": raw_regime,
         "eff_regime": eff_regime,
         "regime_dur_min": regime_duration_minutes(sym),
         "vol_cluster_acf1": float(vol_cluster_map.get(sym, float("nan"))),
-        "hit_rate": float(hr),
-        "dyn_os_mult": float(dyn_mult),
-        "win_rate": float(streak["win_rate"]),
-        "cur_streak": f"{streak['cur_streak_type']} {streak['cur_streak_len']}",
-        "max_win_streak": int(streak["max_win_streak"]),
-        "max_loss_streak": int(streak["max_loss_streak"]),
-        "hit_rate": float(hr),
-        "win_rate": float(streak["win_rate"]),
-        "cur_streak": f"{streak['cur_streak_type']} {streak['cur_streak_len']}",
-        "max_win_streak": int(streak["max_win_streak"]),
-        "max_loss_streak": int(streak["max_loss_streak"]),
         "eff_range_pct": eff_range_pct,
         "levels": eff_levels,
         "order_size": float(eff_order_size),
@@ -980,13 +665,13 @@ if st.session_state.asset_halt:
 summary_df = pd.DataFrame([{"symbol": k, **v} for k, v in pair_summaries.items()]).sort_values("symbol")
 if not summary_df.empty:
     # Defensive: ensure optional ML columns exist (older session states / partial data)
-    for col in ["regime_dur_min", "vol_cluster_acf1", "hit_rate", "win_rate", "cur_streak", "max_win_streak", "max_loss_streak", "dyn_os_mult"]:
+    for col in ["regime_dur_min", "vol_cluster_acf1"]:
         if col not in summary_df.columns:
             summary_df[col] = float("nan")
 
     cols = [
-        "symbol", "price", "eff_regime", "regime_dur_min", "vol_cluster_acf1", "hit_rate", "win_rate", "cur_streak",
-        "eff_range_pct", "levels", "order_size", "dyn_os_mult",
+        "symbol", "price", "eff_regime", "regime_dur_min", "vol_cluster_acf1",
+        "eff_range_pct", "levels", "order_size",
         "pos_base", "avg_entry", "asset_dd_pct", "in_drawdown", "halted", "paused", "closed_pnl", "trades"
     ]
     show = summary_df.reindex(columns=cols).copy()
@@ -995,11 +680,8 @@ if not summary_df.empty:
     show["eff_range_pct"] = show["eff_range_pct"].round(2)
     show["regime_dur_min"] = show["regime_dur_min"].astype(float).round(1)
     show["vol_cluster_acf1"] = show["vol_cluster_acf1"].astype(float).round(2)
-    show["hit_rate"] = (show["hit_rate"].astype(float) * 100.0).round(1)
-    show["win_rate"] = (show["win_rate"].astype(float) * 100.0).round(1)
     show["pos_base"] = show["pos_base"].astype(float).round(6)
     show["avg_entry"] = show["avg_entry"].astype(float).round(2)
-    show["dyn_os_mult"] = show["dyn_os_mult"].astype(float).round(2)
     show["asset_dd_pct"] = show["asset_dd_pct"].astype(float).round(2)
     show["closed_pnl"] = show["closed_pnl"].round(2)
 
@@ -1032,10 +714,6 @@ for i, sym in enumerate(dfs.keys()):
     with tabs[i]:
         df = dfs[sym]
         price = last_prices[sym]
-        if sym not in st.session_state.engines:
-            st.warning("Engine not initialized for this pair (data/initialization issue).")
-            continue
-
         eng: GridEngine = st.session_state.engines[sym]
         grid = eng.grid
         base = sym.split("/")[0]
@@ -1055,25 +733,6 @@ for i, sym in enumerate(dfs.keys()):
             pair_state = "PAUSED" if is_paused else "ACTIVE"
             global_state = "RUNNING" if st.session_state.trading_enabled else "STOPPED"
             st.caption(f"Pair status: {pair_state}  |  Global trading: {global_state}")
-        # --- Range efficiency & streaks quick view ---
-        hr_pct = float(pair_summaries.get(sym, {}).get("hit_rate", float("nan"))) * 100.0
-        wr_pct = float(pair_summaries.get(sym, {}).get("win_rate", float("nan"))) * 100.0
-        st1, st2, st3 = st.columns(3)
-        st1.metric("Hit-rate", f"{hr_pct:.1f}%" if not math.isnan(hr_pct) else "—")
-        st2.metric("Win-rate", f"{wr_pct:.1f}%" if not math.isnan(wr_pct) else "—")
-        st3.metric("Streak", str(pair_summaries.get(sym, {}).get("cur_streak", "—")))
-sug = st.session_state.opt_suggestions.get(sym)
-if sug:
-    rp = float(sug.get("range_pct", float("nan")))
-    if not math.isnan(rp):
-        lv = sug.get("levels", None)
-        lv_txt = str(lv) if lv is not None else "—"
-        hr_s = float(sug.get("hit_rate", float("nan")))
-        st.caption(
-            f"Suggested grid params: range ±{rp:.2f}% | levels {lv_txt} | hit {hr_s*100.0:.1f}%"
-        )
-
-
 
         fig = go.Figure(go.Candlestick(
             x=df["timestamp"], open=df["open"], high=df["high"], low=df["low"], close=df["close"], name="Price"
