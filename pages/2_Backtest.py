@@ -39,6 +39,34 @@ maker_fee = st.sidebar.number_input("Maker fee (%)", 0.0, 1.0, 0.15, step=0.01) 
 taker_fee = st.sidebar.number_input("Taker fee (%)", 0.0, 1.0, 0.25, step=0.01) / 100.0
 slippage = st.sidebar.number_input("Slippage (%)", 0.0, 1.0, 0.05, step=0.01) / 100.0
 
+
+st.sidebar.subheader("Regime-conditional profiles")
+enable_profiles = st.sidebar.checkbox("Enable regime-conditional parameter sets", value=False)
+confirm_n = st.sidebar.slider("Regime confirmations", 1, 10, 3)
+cooldown_candles = st.sidebar.slider("Cooldown (candles)", 0, 200, 0, step=5)
+rebuild_on_change = st.sidebar.checkbox(
+    "Rebuild grid on regime change (flatten + reset cycles)",
+    value=False,
+    help="Interpretable but disruptive: closes position for that symbol when regime switches, rebuilds grid at current price."
+)
+
+profiles = {
+    "RANGE": {"range_pct": 1.0, "levels": 14, "order_size_mult": 1.0, "cycle_tp_enable": True, "cycle_tp_pct": 0.35},
+    "TREND": {"range_pct": 2.0, "levels": 10, "order_size_mult": 0.8, "cycle_tp_enable": False, "cycle_tp_pct": 0.35},
+    "CHAOS": {"range_pct": 3.0, "levels": 8, "order_size_mult": 0.6, "cycle_tp_enable": True, "cycle_tp_pct": 0.50},
+    "WARMUP": {"range_pct": 1.0, "levels": 12, "order_size_mult": 0.8, "cycle_tp_enable": False, "cycle_tp_pct": 0.35},
+}
+
+if enable_profiles:
+    for reg in ["RANGE", "TREND", "CHAOS", "WARMUP"]:
+        with st.sidebar.expander(f"{reg} profile", expanded=(reg == "RANGE")):
+            profiles[reg]["range_pct"] = st.slider(f"{reg} range ± (%)", 0.1, 20.0, float(profiles[reg]["range_pct"]), step=0.1)
+            if reg != "WARMUP":
+                profiles[reg]["levels"] = st.slider(f"{reg} levels (Linear)", 3, 30, int(profiles[reg]["levels"]))
+            profiles[reg]["order_size_mult"] = st.slider(f"{reg} order size mult", 0.1, 3.0, float(profiles[reg]["order_size_mult"]), step=0.1)
+            profiles[reg]["cycle_tp_enable"] = st.checkbox(f"{reg} enable Cycle TP", value=bool(profiles[reg]["cycle_tp_enable"]))
+            profiles[reg]["cycle_tp_pct"] = st.slider(f"{reg} Cycle TP (%)", 0.05, 2.0, float(profiles[reg]["cycle_tp_pct"]), step=0.05, disabled=(not bool(profiles[reg]["cycle_tp_enable"])))
+
 st.sidebar.subheader("Grid params (backtest)")
 grid_type = st.sidebar.selectbox("Grid type", ["Linear", "Fibonacci"], index=0)
 base_range_pct = st.sidebar.slider("Base range ± (%)", 0.1, 20.0, 1.0, step=0.1)
@@ -86,7 +114,7 @@ if run:
         base = sym.split("/")[0]
         caps[base] = float(cap_eur)
 
-    trades_df, equity_curve, trader = run_backtest(
+    trades_df, equity_curve, decision_log, trader = run_backtest(
         dfs=dfs,
         pair_cfg=pair_cfg,
         timeframe=timeframe,
@@ -97,6 +125,11 @@ if run:
         fee_mode=str(fee_mode),
         quote_ccy="EUR",
         max_exposure_quote=caps,
+        regime_profiles=profiles,
+        enable_regime_profiles=bool(enable_profiles),
+        confirm_n=int(confirm_n),
+        cooldown_candles=int(cooldown_candles),
+        rebuild_on_regime_change=bool(rebuild_on_change),
     )
 
     summ = summarize_run(equity_curve, trades_df)
@@ -114,6 +147,16 @@ if run:
     fig.add_scatter(x=equity_curve["timestamp"], y=equity_curve["equity"], mode="lines", name="Equity")
     fig.update_layout(height=380)
     st.plotly_chart(fig, use_container_width=True)
+    
+    
+    st.subheader("Decision log (interpretable execution)")
+    if decision_log is None or decision_log.empty:
+        st.info("No decision log rows (unexpected).")
+    else:
+        sym_sel = st.selectbox("Symbol (decision log)", sorted(decision_log["symbol"].unique()))
+        view = decision_log[decision_log["symbol"] == sym_sel].copy()
+        view = view.tail(500).reset_index(drop=True)
+        st.dataframe(view, use_container_width=True, height=320)
 
     st.subheader("Trades")
     if trades_df is None or trades_df.empty:
