@@ -324,6 +324,61 @@ for sym in symbols:
             cfg["base_levels"] = st.slider(
                 f"{sym} base levels", 3, 30, int(cfg["base_levels"]), key=f"{sym}_levels"
             )
+        # --- Regime profiles (live) ---
+        st.markdown("**Regime profiles (live)**")
+        cfg["use_regime_profiles"] = st.checkbox(
+            f"{sym} Enable regime-conditional parameter sets",
+            value=bool(cfg.get("use_regime_profiles", False)),
+            key=f"{sym}_use_profiles",
+        )
+        cfg["regime_profile_rebuild"] = st.checkbox(
+            f"{sym} Rebuild on regime change (flatten + reset cycles)",
+            value=bool(cfg.get("regime_profile_rebuild", False)),
+            key=f"{sym}_prof_rebuild",
+            help="When effective regime changes: close that symbol's position (sim), rebuild grid at current price, reset cycles.",
+        )
+
+        if bool(cfg.get("use_regime_profiles", False)):
+            for reg in ["RANGE", "TREND", "CHAOS", "WARMUP"]:
+                prof = cfg.setdefault("regime_profiles", {}).setdefault(reg, {})
+                with st.expander(f"{sym} {reg} profile", expanded=(reg == "RANGE")):
+                    prof["range_pct"] = st.slider(
+                        f"{sym} {reg} range ± (%)",
+                        0.1, 20.0,
+                        float(prof.get("range_pct", cfg.get("base_range_pct", 1.0))),
+                        step=0.1,
+                        key=f"{sym}_{reg}_rp",
+                    )
+                    if cfg.get("grid_type") == "Linear":
+                        prof["levels"] = st.slider(
+                            f"{sym} {reg} levels (Linear)",
+                            3, 30,
+                            int(prof.get("levels", cfg.get("base_levels", 12))),
+                            key=f"{sym}_{reg}_lv",
+                        )
+                    prof["order_size_mult"] = st.slider(
+                        f"{sym} {reg} order size mult",
+                        0.1, 3.0,
+                        float(prof.get("order_size_mult", 1.0)),
+                        step=0.1,
+                        key=f"{sym}_{reg}_osm",
+                    )
+                    prof["cycle_tp_enable"] = st.checkbox(
+                        f"{sym} {reg} enable Cycle TP",
+                        value=bool(prof.get("cycle_tp_enable", False)),
+                        key=f"{sym}_{reg}_ctp_en",
+                    )
+                    prof["cycle_tp_pct"] = st.slider(
+                        f"{sym} {reg} Cycle TP (%)",
+                        0.05, 2.0,
+                        float(prof.get("cycle_tp_pct", 0.35)),
+                        step=0.05,
+                        disabled=(not bool(prof.get("cycle_tp_enable", False))),
+                        key=f"{sym}_{reg}_ctp",
+                    )
+
+        st.divider()
+
         cfg["order_size"] = st.number_input(
             f"{sym} order size (base)", value=float(cfg["order_size"]),
             min_value=0.0, format="%.6f", key=f"{sym}_osize"
@@ -909,11 +964,31 @@ for sym, df in dfs.items():
     atr_val, atr_pct, rv_val, bb_val, adx_val, raw_regime = compute_metrics(df, price)
     atr_abs[sym] = atr_val
     eff_regime = apply_hysteresis(sym, raw_regime)
+    # --- Apply regime profile (interpretable, rule-based)
+    profile = None
+    if bool(cfg.get("use_regime_profiles", False)):
+        profile = (cfg.get("regime_profiles") or {}).get(str(eff_regime))
+
+    # Detect regime change for optional rebuild (flatten + reset cycles)
+    if "last_eff_regime" not in st.session_state:
+        st.session_state.last_eff_regime = {}
+    prev_eff = st.session_state.last_eff_regime.get(sym)
+    st.session_state.last_eff_regime[sym] = str(eff_regime)
+
     vc = vol_cluster_acf1(df, window=int(vc_window))
     vol_cluster_map[sym] = vc
 
     range_mult = 1.0
     levels_mult = 1.0
+
+    if profile and bool(cfg.get('regime_profile_rebuild', False)) and prev_eff and prev_eff != str(eff_regime):
+        base = sym.split('/')[0]
+        amt = float(trader.positions.get(base, 0.0))
+        if amt > 1e-12:
+            trader.sell(sym, float(price), amt, ts, reason='REGIME_REBUILD_FLATTEN')
+        # reset cycles; grid will be rebuilt via signature change below
+        if sym in st.session_state.engines:
+            st.session_state.engines[sym].reset_open_cycles()
     if cfg["dynamic_spacing"] and eff_regime != "WARMUP":
         if eff_regime == "TREND":
             range_mult = cfg["k_range"]
@@ -926,12 +1001,20 @@ for sym, df in dfs.items():
     if cfg["dynamic_spacing"] and not math.isnan(atr_pct):
         atr_floor_pct = max(0.0, 3.0 * atr_pct * 100.0)
 
-    eff_range_pct = max(cfg["base_range_pct"] * range_mult, atr_floor_pct) if cfg["dynamic_spacing"] else cfg["base_range_pct"]
+    if profile:
+        cfg_base_range = float(profile.get('range_pct', cfg.get('base_range_pct', 1.0)))
+    else:
+        cfg_base_range = float(cfg.get('base_range_pct', 1.0))
+    eff_range_pct = max(cfg_base_range * range_mult, atr_floor_pct) if cfg['dynamic_spacing'] else cfg_base_range
     lower = price * (1 - eff_range_pct / 100.0)
     upper = price * (1 + eff_range_pct / 100.0)
 
     if cfg["grid_type"] == "Linear":
-        eff_levels = cfg["base_levels"] if not cfg["dynamic_spacing"] else max(3, int(round(cfg["base_levels"] * levels_mult)))
+        if profile:
+            cfg_base_levels = int(profile.get('levels', cfg.get('base_levels', 10)))
+        else:
+            cfg_base_levels = int(cfg.get('base_levels', 10))
+        eff_levels = cfg_base_levels if not cfg['dynamic_spacing'] else max(3, int(round(cfg_base_levels * levels_mult)))
         grid = generate_linear_grid(lower, upper, eff_levels)
     else:
         eff_levels = None
@@ -939,7 +1022,7 @@ for sym, df in dfs.items():
 
     sig = (sym, timeframe, cfg["grid_type"], round(lower, 2), round(upper, 2), len(grid), float(cfg["order_size"]), bool(cfg.get("enable_cycle_tp", False)), float(cfg.get("cycle_tp_pct", 0.35)))
     if sym not in st.session_state.engines or getattr(st.session_state.engines[sym], "_signature", None) != sig:
-        eng = GridEngine(sym, grid, cfg["order_size"])
+        eng = GridEngine(sym, grid, eff_order_size)
         eng._signature = sig
         st.session_state.engines[sym] = eng
 
