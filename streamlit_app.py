@@ -406,6 +406,10 @@ if "regime_state" not in st.session_state:
     st.session_state.regime_state = {}
 if "portfolio_peak_eq" not in st.session_state:
     st.session_state.portfolio_peak_eq = None
+if "dd_hist" not in st.session_state:
+    st.session_state.dd_hist = []  # list of drawdown_pct floats
+if "eq_hist" not in st.session_state:
+    st.session_state.eq_hist = []  # list of equity floats
 if "portfolio_stop_active" not in st.session_state:
     st.session_state.portfolio_stop_active = False
 if "asset_halt" not in st.session_state:
@@ -774,6 +778,35 @@ else:
 peak = st.session_state.portfolio_peak_eq or eq
 dd = (peak - eq) / peak if peak > 0 else 0.0
 
+# --- Equity / drawdown debug metrics
+dd_eur = (peak - eq) if (peak is not None and peak > 0) else 0.0
+
+# Exposure (mark-to-market) and unrealized PnL
+total_exposure_eur = 0.0
+total_unrealized_eur = 0.0
+for sym, px in last_prices.items():
+    base = sym.split("/")[0]
+    pos = float(trader.positions.get(base, 0.0))
+    if pos <= 1e-12:
+        continue
+    total_exposure_eur += pos * float(px)
+    avg_entry = trader.avg_entry_price(base)
+    if avg_entry is not None:
+        total_unrealized_eur += (float(px) - float(avg_entry)) * pos
+
+# History (for sparkline)
+try:
+    st.session_state.eq_hist.append(float(eq))
+    st.session_state.dd_hist.append(float(dd * 100.0))
+    # keep last 240 points
+    if len(st.session_state.eq_hist) > 240:
+        st.session_state.eq_hist = st.session_state.eq_hist[-240:]
+    if len(st.session_state.dd_hist) > 240:
+        st.session_state.dd_hist = st.session_state.dd_hist[-240:]
+except Exception:
+    pass
+
+
 # Portfolio drawdown stop (auto-pause)
 portfolio_stop_triggered = False
 if enable_portfolio_dd and (dd * 100.0) >= max_dd_pct:
@@ -1043,12 +1076,20 @@ for sym, df in dfs.items():
 # Portfolio header
 # ----------------------------
 st.subheader("Portfolio")
-colA, colB, colC, colD, colE = st.columns(5)
+colA, colB, colC, colD, colE, colF, colG = st.columns(7)
 colA.metric("Cash (EUR)", f"{trader.cash:.2f}")
 colB.metric("Equity (EUR)", f"{eq:.2f}")
 colC.metric("Peak equity (EUR)", f"{peak:.2f}")
-colD.metric("Drawdown", f"{dd*100:.2f}%")
-colE.metric("Portfolio stop", "ACTIVE" if st.session_state.portfolio_stop_active else "—")
+colD.metric("DD (EUR)", f"{dd_eur:.2f}")
+colE.metric("DD (%)", f"{dd*100:.2f}%")
+colF.metric("Exposure (EUR)", f"{total_exposure_eur:.2f}")
+colG.metric("Unrealized PnL (EUR)", f"{total_unrealized_eur:.2f}")
+
+with st.expander("Drawdown history (last points)", expanded=False):
+    if st.session_state.dd_hist:
+        st.line_chart(st.session_state.dd_hist, height=140)
+    else:
+        st.caption("No history yet.")
 
 if st.session_state.asset_halt:
     st.warning(f"Asset halt active (no new buys): {', '.join(sorted(st.session_state.asset_halt))}")
