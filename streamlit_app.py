@@ -212,6 +212,15 @@ max_assets_in_dd = st.sidebar.slider("Max assets in drawdown", 0, 10, 2, step=1,
 enable_corr_filter = st.sidebar.checkbox("Enable correlation filter", value=True)
 corr_window = st.sidebar.slider("Correlation window (candles)", 20, 300, 120, step=10, disabled=not enable_corr_filter)
 corr_threshold = st.sidebar.slider("Correlation threshold", 0.0, 0.99, 0.85, step=0.01, disabled=not enable_corr_filter)
+
+
+# ----------------------------
+# Interpretable execution (UI)
+# ----------------------------
+st.sidebar.subheader("Interpretable execution")
+show_decision_log = st.sidebar.checkbox("Show decision log tables", value=True)
+decision_log_rows = st.sidebar.slider("Decision log rows (per pair)", 50, 2000, 300, step=50)
+
 st.sidebar.subheader("Stop-loss testing (simulation)")
 enable_portfolio_dd = st.sidebar.checkbox("Enable portfolio drawdown stop", value=True)
 max_dd_pct = st.sidebar.slider(
@@ -403,6 +412,10 @@ if "asset_halt" not in st.session_state:
     st.session_state.asset_halt = set()  # base assets halted due to stop
 if "pair_paused" not in st.session_state:
     st.session_state.pair_paused = set()  # symbols paused manually (no trading)
+
+# --- Interpretable execution log (per pair)
+if "decision_log" not in st.session_state:
+    st.session_state.decision_log = {}  # sym -> deque of decision dicts
 
 
 # ----------------------------
@@ -922,6 +935,69 @@ for sym, df in dfs.items():
     allow_buys = global_allow_buys and (base not in st.session_state.asset_halt)
 
     pair_is_paused = sym in st.session_state.pair_paused
+
+    # --- Interpretable decision snapshot (before execution)
+    if sym not in st.session_state.decision_log:
+        st.session_state.decision_log[sym] = deque(maxlen=int(decision_log_rows) if "decision_log_rows" in globals() else 500)
+
+    base_cap = per_asset_caps.get(base)
+    exposure = float(trader.positions.get(base, 0.0)) * float(price)
+    cap_remaining = (float(base_cap) - exposure) if (base_cap is not None) else float("nan")
+
+    reasons = []
+    if not st.session_state.trading_enabled:
+        reasons.append("GLOBAL_STOPPED")
+    if pair_is_paused:
+        reasons.append("PAIR_PAUSED")
+    if not global_allow_buys:
+        reasons.append("PORTFOLIO_STOP_ACTIVE")
+    if base in st.session_state.asset_halt:
+        reasons.append("ASSET_HALT")
+    if (base_cap is not None) and (cap_remaining <= 1e-6):
+        reasons.append("CAP_REACHED")
+
+    # Drawdown-limit state (hard block on new buys)
+    if enable_dd_limit and max_assets_in_dd > 0:
+        if dd_assets_count >= max_assets_in_dd:
+            reasons.append("DRAWDOWN_LIMIT")
+
+    # Correlation summary vs held assets
+    corr_max = float("nan")
+    corr_with = ""
+    if enable_corr_filter and corr_matrix is not None:
+        held_symbols = []
+        for b, amt in trader.positions.items():
+            if amt > 1e-12:
+                held_symbols.append(f"{b}/EUR")
+        for hs in held_symbols:
+            if hs == sym:
+                continue
+            if (sym in corr_matrix.index) and (hs in corr_matrix.columns):
+                c = float(corr_matrix.loc[sym, hs])
+                if not math.isnan(c):
+                    if math.isnan(corr_max) or c > corr_max:
+                        corr_max = c
+                        corr_with = hs
+        if (not math.isnan(corr_max)) and corr_max >= float(corr_threshold):
+            reasons.append(f"CORR_BLOCK:{corr_with}:{corr_max:.2f}")
+
+    st.session_state.decision_log[sym].append({
+        "time": ts,
+        "price": float(price),
+        "raw_regime": raw_regime,
+        "eff_regime": eff_regime,
+        "allow_buys": bool(allow_buys),
+        "pos_base": float(trader.positions.get(base, 0.0)),
+        "avg_entry": float(trader.avg_entry_price(base) or 0.0),
+        "exposure_eur": exposure,
+        "cap_eur": float(base_cap) if base_cap is not None else float("nan"),
+        "cap_remaining_eur": cap_remaining,
+        "assets_in_dd": int(dd_assets_count),
+        "corr_max": corr_max,
+        "corr_with": corr_with,
+        "reasons": ";".join(reasons) if reasons else "OK",
+    })
+
     if st.session_state.trading_enabled and (not pair_is_paused):
         eng.check_price(price, trader, ts, allow_buys=allow_buys, buy_guard=buy_guard)
 
@@ -1055,6 +1131,57 @@ for i, sym in enumerate(dfs.keys()):
             pair_state = "PAUSED" if is_paused else "ACTIVE"
             global_state = "RUNNING" if st.session_state.trading_enabled else "STOPPED"
             st.caption(f"Pair status: {pair_state}  |  Global trading: {global_state}")
+
+            # --- Explain panel (interpretable, non-black-box)
+            with st.expander("Execution explain (why buys/sells happen or are blocked)", expanded=False):
+                base_cap = per_asset_caps.get(base)
+                pos_amt = float(trader.positions.get(base, 0.0))
+                avg_entry = trader.avg_entry_price(base)
+                exposure = pos_amt * float(price)
+                cap_remaining = (float(base_cap) - exposure) if (base_cap is not None) else None
+
+                st.write(f"**Regime:** raw={pair_summaries.get(sym, {}).get('raw_regime')} | effective={pair_summaries.get(sym, {}).get('eff_regime')}")
+                st.write(f"**Trading enabled:** {st.session_state.trading_enabled} | **Pair paused:** {is_paused} | **Portfolio stop:** {st.session_state.portfolio_stop_active}")
+                st.write(f"**Allow buys (this tick):** {pair_summaries.get(sym, {}).get('allow_buys', True)}")
+                if base_cap is not None:
+                    st.write(f"**Exposure cap:** {float(base_cap):.2f} EUR | **Current exposure:** {exposure:.2f} EUR | **Remaining:** {cap_remaining:.2f} EUR")
+                st.write(f"**Position:** {pos_amt:.6f} {base} | **Avg entry:** {avg_entry:.2f} EUR" if avg_entry else f"**Position:** {pos_amt:.6f} {base}")
+
+                buys = sorted(list(getattr(eng, "active_buys", [])), reverse=True)
+                sells = sorted(list(getattr(eng, "active_sells", [])))
+                st.write(f"**Active buy levels:** {len(buys)} | **Active sell levels:** {len(sells)} | **Open cycles:** {len(getattr(eng, 'open_cycles', {}))}")
+
+                if buys:
+                    next_buy = min([b for b in buys if b >= price], default=None)
+                    st.write(f"Next BUY level (limit): {next_buy:.2f}" if next_buy else "No BUY levels above/at current price.")
+                if sells:
+                    next_sell = min([s for s in sells if s >= price], default=None)
+                    st.write(f"Next SELL level (limit): {next_sell:.2f}" if next_sell else "No SELL levels above current price (some may be eligible already).")
+
+                if bool(getattr(eng, "enable_cycle_tp", False)) and float(getattr(eng, "cycle_tp_pct", 0.0)) > 0.0 and getattr(eng, "open_cycles", {}):
+                    tp_mult = 1.0 + (float(getattr(eng, "cycle_tp_pct", 0.0)) / 100.0)
+                    tp_prices = [float(oc.buy_price) * tp_mult for oc in eng.open_cycles.values()]
+                    nearest_tp = min([tp for tp in tp_prices if tp >= price], default=None)
+                    st.write(f"**Cycle TP enabled:** {float(getattr(eng,'cycle_tp_pct')):.2f}% | nearest TP: {nearest_tp:.2f}" if nearest_tp else f"**Cycle TP enabled:** {float(getattr(eng,'cycle_tp_pct')):.2f}% | some TP(s) may be eligible now.")
+
+            if show_decision_log:
+                dlog = st.session_state.decision_log.get(sym)
+                if dlog:
+                    ddf = pd.DataFrame(list(dlog)).tail(int(decision_log_rows))
+                    if "price" in ddf.columns:
+                        ddf["price"] = ddf["price"].astype(float).round(2)
+                    if "pos_base" in ddf.columns:
+                        ddf["pos_base"] = ddf["pos_base"].astype(float).round(6)
+                    if "exposure_eur" in ddf.columns:
+                        ddf["exposure_eur"] = ddf["exposure_eur"].astype(float).round(2)
+                    if "cap_remaining_eur" in ddf.columns:
+                        ddf["cap_remaining_eur"] = ddf["cap_remaining_eur"].astype(float).round(2)
+                    if "corr_max" in ddf.columns:
+                        ddf["corr_max"] = ddf["corr_max"].astype(float).round(3)
+                    st.dataframe(ddf, width="stretch", height=240)
+                else:
+                    st.caption("No decision log rows yet for this pair.")
+
         # --- Range efficiency & streaks quick view ---
         hr_pct = float(pair_summaries.get(sym, {}).get("hit_rate", float("nan"))) * 100.0
         wr_pct = float(pair_summaries.get(sym, {}).get("win_rate", float("nan"))) * 100.0
