@@ -1,5 +1,6 @@
 import math
 import time
+import json
 from collections import deque
 from typing import Dict, Tuple
 
@@ -268,6 +269,62 @@ streak_scope = st.sidebar.slider("Streak scope (closed cycles)", 20, 2000, 300, 
 # Per-pair grid settings
 # ----------------------------
 st.sidebar.subheader("Per-pair grid settings")
+
+st.sidebar.subheader("Profiles import/export")
+uploaded = st.sidebar.file_uploader("Import profiles.json", type=["json"])
+if uploaded is not None:
+    try:
+        cfg_blob = json.load(uploaded)
+        if isinstance(cfg_blob, dict):
+            # Merge into pair_cfg
+            if "pair_cfg" not in st.session_state:
+                st.session_state.pair_cfg = {}
+            for sym, blob in cfg_blob.items():
+                sym = str(sym).upper()
+                if sym not in st.session_state.pair_cfg:
+                    # keep existing default_cfg if available later in code
+                    st.session_state.pair_cfg[sym] = {}
+                if isinstance(blob, dict):
+                    st.session_state.pair_cfg[sym]["use_regime_profiles"] = bool(blob.get("use_regime_profiles", True))
+                    st.session_state.pair_cfg[sym]["regime_profile_rebuild"] = bool(blob.get("regime_profile_rebuild", False))
+                    if "regime_profiles" in blob and isinstance(blob["regime_profiles"], dict):
+                        st.session_state.pair_cfg[sym]["regime_profiles"] = blob["regime_profiles"]
+        st.sidebar.success("Profiles imported into session.")
+        st.rerun()
+    except Exception as e:
+        st.sidebar.error(f"Import failed: {e}")
+
+# Apply trained profiles from Trainer page (same session)
+if st.sidebar.button("Apply optimized profiles from Trainer", width="stretch"):
+    trained = st.session_state.get("trained_profiles")
+    if isinstance(trained, dict) and trained:
+        if "pair_cfg" not in st.session_state:
+            st.session_state.pair_cfg = {}
+        for sym, blob in trained.items():
+            sym_u = str(sym).upper()
+            st.session_state.pair_cfg.setdefault(sym_u, {}).update(blob)
+        st.sidebar.success("Applied trained profiles.")
+        st.rerun()
+    else:
+        st.sidebar.info("No trained profiles found in session. Run Trainer page first.")
+
+# Export current profiles (only the regime-related fields)
+def _export_profiles():
+    out = {}
+    if "pair_cfg" in st.session_state and isinstance(st.session_state.pair_cfg, dict):
+        for sym, cfg in st.session_state.pair_cfg.items():
+            if not isinstance(cfg, dict):
+                continue
+            out[str(sym).upper()] = {
+                "use_regime_profiles": bool(cfg.get("use_regime_profiles", False)),
+                "regime_profile_rebuild": bool(cfg.get("regime_profile_rebuild", False)),
+                "regime_profiles": cfg.get("regime_profiles", {}),
+            }
+    return out
+
+export_payload = json.dumps(_export_profiles(), indent=2)
+st.sidebar.download_button("Download current profiles.json", data=export_payload, file_name="profiles.json", width="stretch")
+
 if "opt_suggestions" not in st.session_state:
     st.session_state.opt_suggestions = {}
 if "last_hit_rate" not in st.session_state:
