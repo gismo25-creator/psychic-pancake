@@ -1337,55 +1337,55 @@ for i, sym in enumerate(dfs.keys()):
             global_state = "RUNNING" if st.session_state.trading_enabled else "STOPPED"
             st.caption(f"Pair status: {pair_state}  |  Global trading: {global_state}")
 
-            # --- Explain panel (interpretable, non-black-box)
-            with st.expander("Execution explain (why buys/sells happen or are blocked)", expanded=False):
-                base_cap = per_asset_caps.get(base)
-                pos_amt = float(trader.positions.get(base, 0.0))
-                avg_entry = trader.avg_entry_price(base)
-                exposure = pos_amt * float(price)
-                cap_remaining = (float(base_cap) - exposure) if (base_cap is not None) else None
+        # --- Explain panel (interpretable, non-black-box)
+        with st.expander("Execution explain (why buys/sells happen or are blocked)", expanded=False):
+            base_cap = per_asset_caps.get(base)
+            pos_amt = float(trader.positions.get(base, 0.0))
+            avg_entry = trader.avg_entry_price(base)
+            exposure = pos_amt * float(price)
+            cap_remaining = (float(base_cap) - exposure) if (base_cap is not None) else None
 
-                st.write(f"**Regime:** raw={pair_summaries.get(sym, {}).get('raw_regime')} | effective={pair_summaries.get(sym, {}).get('eff_regime')}")
-                st.write(f"**Trading enabled:** {st.session_state.trading_enabled} | **Pair paused:** {is_paused} | **Portfolio stop:** {st.session_state.portfolio_stop_active}")
-                st.write(f"**Allow buys (this tick):** {pair_summaries.get(sym, {}).get('allow_buys', True)}")
-                if base_cap is not None:
-                    st.write(f"**Exposure cap:** {float(base_cap):.2f} EUR | **Current exposure:** {exposure:.2f} EUR | **Remaining:** {cap_remaining:.2f} EUR")
-                st.write(f"**Position:** {pos_amt:.6f} {base} | **Avg entry:** {avg_entry:.2f} EUR" if avg_entry else f"**Position:** {pos_amt:.6f} {base}")
+            st.write(f"**Regime:** raw={pair_summaries.get(sym, {}).get('raw_regime')} | effective={pair_summaries.get(sym, {}).get('eff_regime')}")
+            st.write(f"**Trading enabled:** {st.session_state.trading_enabled} | **Pair paused:** {is_paused} | **Portfolio stop:** {st.session_state.portfolio_stop_active}")
+            st.write(f"**Allow buys (this tick):** {pair_summaries.get(sym, {}).get('allow_buys', True)}")
+            if base_cap is not None:
+                st.write(f"**Exposure cap:** {float(base_cap):.2f} EUR | **Current exposure:** {exposure:.2f} EUR | **Remaining:** {cap_remaining:.2f} EUR")
+            st.write(f"**Position:** {pos_amt:.6f} {base} | **Avg entry:** {avg_entry:.2f} EUR" if avg_entry else f"**Position:** {pos_amt:.6f} {base}")
 
-                buys = sorted(list(getattr(eng, "active_buys", [])), reverse=True)
-                sells = sorted(list(getattr(eng, "active_sells", [])))
-                st.write(f"**Active buy levels:** {len(buys)} | **Active sell levels:** {len(sells)} | **Open cycles:** {len(getattr(eng, 'open_cycles', {}))}")
+            buys = sorted(list(getattr(eng, "active_buys", [])), reverse=True)
+            sells = sorted(list(getattr(eng, "active_sells", [])))
+            st.write(f"**Active buy levels:** {len(buys)} | **Active sell levels:** {len(sells)} | **Open cycles:** {len(getattr(eng, 'open_cycles', {}))}")
 
-                if buys:
-                    next_buy = min([b for b in buys if b >= price], default=None)
-                    st.write(f"Next BUY level (limit): {next_buy:.2f}" if next_buy else "No BUY levels above/at current price.")
-                if sells:
-                    next_sell = min([s for s in sells if s >= price], default=None)
-                    st.write(f"Next SELL level (limit): {next_sell:.2f}" if next_sell else "No SELL levels above current price (some may be eligible already).")
+            if buys:
+                next_buy = min([b for b in buys if b >= price], default=None)
+                st.write(f"Next BUY level (limit): {next_buy:.2f}" if next_buy else "No BUY levels above/at current price.")
+            if sells:
+                next_sell = min([s for s in sells if s >= price], default=None)
+                st.write(f"Next SELL level (limit): {next_sell:.2f}" if next_sell else "No SELL levels above current price (some may be eligible already).")
 
-                if bool(getattr(eng, "enable_cycle_tp", False)) and float(getattr(eng, "cycle_tp_pct", 0.0)) > 0.0 and getattr(eng, "open_cycles", {}):
-                    tp_mult = 1.0 + (float(getattr(eng, "cycle_tp_pct", 0.0)) / 100.0)
-                    tp_prices = [float(oc.buy_price) * tp_mult for oc in eng.open_cycles.values()]
-                    nearest_tp = min([tp for tp in tp_prices if tp >= price], default=None)
-                    st.write(f"**Cycle TP enabled:** {float(getattr(eng,'cycle_tp_pct')):.2f}% | nearest TP: {nearest_tp:.2f}" if nearest_tp else f"**Cycle TP enabled:** {float(getattr(eng,'cycle_tp_pct')):.2f}% | some TP(s) may be eligible now.")
+            if bool(getattr(eng, "enable_cycle_tp", False)) and float(getattr(eng, "cycle_tp_pct", 0.0)) > 0.0 and getattr(eng, "open_cycles", {}):
+                tp_mult = 1.0 + (float(getattr(eng, "cycle_tp_pct", 0.0)) / 100.0)
+                tp_prices = [float(oc.buy_price) * tp_mult for oc in eng.open_cycles.values()]
+                nearest_tp = min([tp for tp in tp_prices if tp >= price], default=None)
+                st.write(f"**Cycle TP enabled:** {float(getattr(eng,'cycle_tp_pct')):.2f}% | nearest TP: {nearest_tp:.2f}" if nearest_tp else f"**Cycle TP enabled:** {float(getattr(eng,'cycle_tp_pct')):.2f}% | some TP(s) may be eligible now.")
 
-            if show_decision_log:
-                dlog = st.session_state.decision_log.get(sym)
-                if dlog:
-                    ddf = pd.DataFrame(list(dlog)).tail(int(decision_log_rows))
-                    if "price" in ddf.columns:
-                        ddf["price"] = ddf["price"].astype(float).round(2)
-                    if "pos_base" in ddf.columns:
-                        ddf["pos_base"] = ddf["pos_base"].astype(float).round(6)
-                    if "exposure_eur" in ddf.columns:
-                        ddf["exposure_eur"] = ddf["exposure_eur"].astype(float).round(2)
-                    if "cap_remaining_eur" in ddf.columns:
-                        ddf["cap_remaining_eur"] = ddf["cap_remaining_eur"].astype(float).round(2)
-                    if "corr_max" in ddf.columns:
-                        ddf["corr_max"] = ddf["corr_max"].astype(float).round(3)
-                    st.dataframe(ddf, width="stretch", height=240)
-                else:
-                    st.caption("No decision log rows yet for this pair.")
+        if show_decision_log:
+            dlog = st.session_state.decision_log.get(sym)
+            if dlog:
+                ddf = pd.DataFrame(list(dlog)).tail(int(decision_log_rows))
+                if "price" in ddf.columns:
+                    ddf["price"] = ddf["price"].astype(float).round(2)
+                if "pos_base" in ddf.columns:
+                    ddf["pos_base"] = ddf["pos_base"].astype(float).round(6)
+                if "exposure_eur" in ddf.columns:
+                    ddf["exposure_eur"] = ddf["exposure_eur"].astype(float).round(2)
+                if "cap_remaining_eur" in ddf.columns:
+                    ddf["cap_remaining_eur"] = ddf["cap_remaining_eur"].astype(float).round(2)
+                if "corr_max" in ddf.columns:
+                    ddf["corr_max"] = ddf["corr_max"].astype(float).round(3)
+                st.dataframe(ddf, width="stretch", height=240)
+            else:
+                st.caption("No decision log rows yet for this pair.")
 
         # --- Range efficiency & streaks quick view ---
         hr_pct = float(pair_summaries.get(sym, {}).get("hit_rate", float("nan"))) * 100.0
