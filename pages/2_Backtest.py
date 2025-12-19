@@ -13,8 +13,8 @@ from core.grid.fibonacci import generate_fibonacci_grid
 st.set_page_config(layout="wide")
 st.title("Backtest – Offline replay (Bitvavo / ccxt)")
 
-#if "bt_results" not in st.session_state:
-#    st.session_state.bt_results = None
+if "bt_results" not in st.session_state:
+    st.session_state.bt_results = None
 
 st.info(
     "Step 1: offline replay backtest op candle CLOSE prijzen, met vaste grid per pair (gebaseerd op startprijs). "
@@ -141,53 +141,64 @@ if run:
 # Render persisted backtest results (so UI widgets do not reset the page)
 # ----------------------------
 results = st.session_state.bt_results
+
 if results is None:
-    st.caption("Run een backtest om resultaten te zien. Resultaten blijven zichtbaar bij het wisselen van dropdowns.")
-    st.stop()
-
-trades_df = results["trades_df"]
-equity_curve = results["equity_curve"]
-decision_log = results["decision_log"]
-
-summ = summarize_run(equity_curve, trades_df)
-
-st.subheader("Summary")
-c1, c2, c3, c4, c5 = st.columns(5)
-c1.metric("Start equity", f"{summ['start_equity']:.2f}")
-c2.metric("End equity", f"{summ['end_equity']:.2f}")
-c3.metric("Total PnL", f"{summ['total_pnl']:.2f}")
-c4.metric("Max drawdown", f"{summ['max_drawdown']*100:.2f}%")
-c5.metric("Win-rate (SELL)", f"{summ['win_rate']*100:.1f}%" if summ["win_rate"] == summ["win_rate"] else "—")
-
-st.subheader("Equity curve")
-fig = go.Figure()
-fig.add_scatter(x=equity_curve["timestamp"], y=equity_curve["equity"], mode="lines", name="Equity")
-fig.update_layout(height=380)
-st.plotly_chart(fig, use_container_width=True)
-
-
-st.subheader("Decision log (interpretable execution)")
-if decision_log is None or decision_log.empty:
-    st.info("No decision log rows (unexpected).")
+    st.info("Run een backtest om resultaten te zien. Resultaten blijven zichtbaar bij het wisselen van dropdowns.")
 else:
-    sym_sel = st.selectbox("Symbol (decision log)", sorted(decision_log["symbol"].unique()), key="bt_decision_symbol")
-    view = decision_log[decision_log["symbol"] == sym_sel].copy()
-    view = view.tail(500).reset_index(drop=True)
-    st.dataframe(view, use_container_width=True, height=320)
+    trades_df = results["trades_df"]
+    equity_curve = results["equity_curve"]
+    decision_log = results["decision_log"]
 
-st.subheader("Trades")
-if trades_df is None or trades_df.empty:
-    st.info("No trades executed in this backtest window.")
-else:
-    show = trades_df.copy()
-    show["price"] = show["price"].astype(float).round(2)
-    show["amount"] = show["amount"].astype(float).round(6)
-    if "pnl" in show.columns:
-        show["pnl"] = show["pnl"].astype(float).round(2)
-    st.dataframe(show, use_container_width=True, height=420)
 
-# Downloads
-st.subheader("Exports")
-if trades_df is not None and not trades_df.empty:
-    st.download_button("Download trades.csv", data=trades_df.to_csv(index=False), file_name="trades.csv")
-st.download_button("Download equity_curve.csv", data=equity_curve.to_csv(index=False), file_name="equity_curve.csv")
+    # --- Summary
+    summ = summarize_run(equity_curve, trades_df)
+
+    st.subheader("Summary")
+    c1, c2, c3, c4, c5 = st.columns(5)
+    c1.metric("Start equity", f"{summ['start_equity']:.2f}")
+    c2.metric("End equity", f"{summ['end_equity']:.2f}")
+    c3.metric("Total PnL", f"{summ['total_pnl']:.2f}")
+    c4.metric("Max drawdown", f"{summ['max_drawdown']*100:.2f}%")
+    c5.metric("Win-rate (SELL)", f"{summ['win_rate']*100:.1f}%" if summ["win_rate"] == summ["win_rate"] else "—")
+
+    # --- Equity curve
+    st.subheader("Equity curve")
+    fig = go.Figure()
+    fig.add_scatter(x=equity_curve["timestamp"], y=equity_curve["equity"], mode="lines", name="Equity")
+    fig.update_layout(height=380)
+    st.plotly_chart(fig, use_container_width=True)
+
+    # --- Decision log
+    st.subheader("Decision log (interpretable execution)")
+    if decision_log is None or decision_log.empty or ("symbol" not in decision_log.columns):
+        st.info("No decision log rows (unexpected).")
+    else:
+        sym_sel = st.sidebar.selectbox(
+            "Decision log symbol",
+            sorted(decision_log["symbol"].unique()),
+            key="bt_decision_symbol",
+        )
+        with st.expander("Show decision log table", expanded=True):
+            view = decision_log[decision_log["symbol"] == sym_sel].copy()
+            view = view.tail(500).reset_index(drop=True)
+            st.dataframe(view, use_container_width=True, height=320)
+
+    # --- Trades
+    st.subheader("Trades")
+    if trades_df is None or trades_df.empty:
+        st.info("No trades executed in this backtest window.")
+    else:
+        show = trades_df.copy()
+        if "price" in show.columns:
+            show["price"] = show["price"].astype(float).round(2)
+        if "amount" in show.columns:
+            show["amount"] = show["amount"].astype(float).round(6)
+        if "pnl" in show.columns:
+            show["pnl"] = show["pnl"].astype(float).round(2)
+        st.dataframe(show, use_container_width=True, height=420)
+
+    # --- Exports
+    st.subheader("Exports")
+    if trades_df is not None and (not trades_df.empty):
+        st.download_button("Download trades.csv", data=trades_df.to_csv(index=False), file_name="trades.csv")
+    st.download_button("Download equity_curve.csv", data=equity_curve.to_csv(index=False), file_name="equity_curve.csv")
