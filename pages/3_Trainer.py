@@ -14,7 +14,7 @@ st.info(
 )
 
 st.sidebar.subheader("Data")
-symbol = st.sidebar.selectbox("Symbol", ["BTC/EUR", "ETH/EUR", "ICNT/EUR"], index=0)
+symbol = st.sidebar.selectbox("Symbol", ["BTC/EUR", "ETH/EUR", "SOL/EUR"], index=0)
 timeframe = st.sidebar.selectbox("Timeframe", ["1m", "5m", "15m"], index=1)
 lookback_days = st.sidebar.slider("Lookback (days)", 1, 90, 30)
 force_refresh = st.sidebar.checkbox("Force refresh OHLCV cache", value=False)
