@@ -5,6 +5,15 @@ from dataclasses import dataclass
 from typing import Optional
 
 import pandas as pd
+
+
+def _to_utc_ts(x) -> pd.Timestamp:
+    """Normalize any timestamp-like input to UTC tz-aware pandas Timestamp."""
+    ts = pd.Timestamp(x)
+    if ts.tzinfo is None:
+        return ts.tz_localize('UTC')
+    return ts.tz_convert('UTC')
+
 import ccxt
 
 
@@ -88,14 +97,15 @@ def fetch_ohlcv_range_bitvavo(
             break
 
     df = pd.DataFrame(all_rows, columns=["timestamp","open","high","low","close","volume"])
-    df["timestamp"] = pd.to_datetime(df["timestamp"], unit="ms")
+    df["timestamp"] = pd.to_datetime(df["timestamp"], unit="ms", utc=True)
 
-    # Filter range
+    # Filter range (timezone-safe)
     if since is not None:
-        df = df[df["timestamp"] >= pd.Timestamp(since)]
+        since_ts = _to_utc_ts(since)
+        df = df[df["timestamp"] >= since_ts]
     if until is not None:
-        df = df[df["timestamp"] <= pd.Timestamp(until)]
-
+        until_ts = _to_utc_ts(until)
+        df = df[df["timestamp"] <= until_ts]
     df = df.drop_duplicates(subset=["timestamp"]).sort_values("timestamp").reset_index(drop=True)
     return df
 
@@ -109,6 +119,10 @@ def load_or_fetch(
 ) -> pd.DataFrame:
     """Load from local cache; fetch missing range if needed (simplified)."""
     cached = None if force_refresh else load_cached(symbol, timeframe)
+    if cached is not None and (not cached.empty):
+        # Normalize cached timestamps to UTC (handles older cache formats)
+        cached = cached.copy()
+        cached["timestamp"] = pd.to_datetime(cached["timestamp"], utc=True)
     if cached is None or cached.empty:
         df = fetch_ohlcv_range_bitvavo(symbol, timeframe=timeframe, since=since, until=until)
         save_cache(symbol, timeframe, df)
@@ -118,17 +132,17 @@ def load_or_fetch(
     cmin = cached["timestamp"].min()
     cmax = cached["timestamp"].max()
     need_fetch = False
-    if since is not None and pd.Timestamp(since) < pd.Timestamp(cmin):
+    if since is not None and _to_utc_ts(since) < _to_utc_ts(cmin):
         need_fetch = True
-    if until is not None and pd.Timestamp(until) > pd.Timestamp(cmax):
+    if until is not None and _to_utc_ts(until) > _to_utc_ts(cmax):
         need_fetch = True
 
     if not need_fetch:
         df = cached.copy()
         if since is not None:
-            df = df[df["timestamp"] >= pd.Timestamp(since)]
+            df = df[df["timestamp"] >= _to_utc_ts(since)]
         if until is not None:
-            df = df[df["timestamp"] <= pd.Timestamp(until)]
+            df = df[df["timestamp"] <= _to_utc_ts(until)]
         return df.reset_index(drop=True)
 
     # Fetch full requested range and overwrite cache (keep it simple/robust)
