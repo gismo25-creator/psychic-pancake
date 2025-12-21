@@ -8,30 +8,31 @@ from core.backtest.metrics import summarize_run
 from core.training.regime_optimizer import SearchSpace, staged_optimize_regime_profiles
 
 st.set_page_config(layout="wide")
-st.title("Trainer – Offline tuning (interpretable profiles + walk-forward)")
+st.title("Trainer – Offline tuning (interpretable profiles + multi-fold walk-forward)")
 
 st.info(
-    "Deze trainer voert een staged grid-search uit (per regime één voor één) op historische data. "
-    "Nieuw: walk-forward evaluatie (train/test split), zodat je direct ziet of instellingen generaliseren."
+    "Staged grid-search per regime (interpreteerbaar) + multi-fold walk-forward evaluatie. "
+    "Je krijgt per fold train/test metrics en een risk-adjusted test score."
 )
 
 # ----------------------------
-# Sidebar: data + evaluation setup
+# Sidebar
 # ----------------------------
 st.sidebar.subheader("Data")
-symbols = st.sidebar.multiselect("Symbols", ["BTC/EUR", "ETH/EUR", "SOL/EUR", "XRP/EUR", "ADA/EUR"], default=["BTC/EUR"])
+symbols = st.sidebar.multiselect(
+    "Symbols",
+    ["BTC/EUR", "ETH/EUR", "SOL/EUR", "XRP/EUR", "ADA/EUR"],
+    default=["BTC/EUR"],
+)
 timeframe = st.sidebar.selectbox("Timeframe", ["1m", "5m", "15m"], index=1)
-lookback_days = st.sidebar.slider("Lookback (days)", 1, 180, 60)
+lookback_days = st.sidebar.slider("Lookback (days)", 7, 365, 90)
 force_refresh = st.sidebar.checkbox("Force refresh OHLCV cache", value=False)
 
-st.sidebar.subheader("Train/Test split")
-split_mode = st.sidebar.selectbox("Split mode", ["Percent split", "Last N days test"], index=0)
-if split_mode == "Percent split":
-    test_pct = st.sidebar.slider("Test set (%)", 5, 60, 30)
-    test_days = None
-else:
-    test_days = st.sidebar.slider("Test window (days)", 1, 60, 14)
-    test_pct = None
+st.sidebar.subheader("Walk-forward (rolling folds)")
+folds = st.sidebar.slider("Folds", 2, 8, 4)
+test_window_days = st.sidebar.slider("Test window (days)", 1, 60, 14)
+step_days = st.sidebar.slider("Step (days)", 1, 60, 14, help="Hoeveel dagen het window opschuift per fold.")
+min_train_days = st.sidebar.slider("Min train (days)", 7, 180, 30)
 
 st.sidebar.subheader("Fees / slippage (simulation)")
 start_cash = st.sidebar.number_input("Start cash (EUR)", min_value=0.0, value=1000.0, step=100.0)
@@ -45,8 +46,12 @@ confirm_n = st.sidebar.slider("Regime confirmations", 1, 10, 3)
 cooldown_candles = st.sidebar.slider("Cooldown (candles)", 0, 200, 0, step=5)
 
 st.sidebar.subheader("Objective (interpretable)")
-dd_penalty = st.sidebar.slider("DD penalty", 0.0, 10.0, 3.0, step=0.25)
+dd_penalty = st.sidebar.slider("DD penalty (trainer objective)", 0.0, 10.0, 3.0, step=0.25)
 trade_penalty = st.sidebar.slider("Low-trade penalty", 0.0, 2.0, 0.0, step=0.05)
+
+st.sidebar.subheader("Risk-adjusted test score")
+score_mode = st.sidebar.selectbox("Score mode", ["PnL / MaxDD (Calmar-like)", "PnL - λ·MaxDD"], index=0)
+lambda_dd = st.sidebar.slider("λ (only for PnL - λ·MaxDD)", 0.0, 50.0, 10.0, step=0.5)
 
 st.sidebar.subheader("Base grid (baseline)")
 grid_type = st.sidebar.selectbox("Grid type", ["Linear", "Fibonacci"], index=0)
@@ -63,36 +68,59 @@ os_mult_candidates = st.sidebar.multiselect("Order-size mult candidates", [0.4,0
 cycle_tp_enable = st.sidebar.multiselect("Cycle TP enable", [False, True], default=[False, True])
 cycle_tp_pcts = st.sidebar.multiselect("Cycle TP (%) candidates", [0.15,0.20,0.35,0.50,0.80,1.00], default=[0.20,0.35,0.50,0.80])
 
-run = st.sidebar.button("▶ Train profiles (walk-forward)", width="stretch")
+run = st.sidebar.button("▶ Train (multi-fold WF)", width="stretch")
 
 if "trained_profiles" not in st.session_state:
     st.session_state.trained_profiles = None
 if "trainer_report" not in st.session_state:
     st.session_state.trainer_report = None
+if "trainer_fold_details" not in st.session_state:
+    st.session_state.trainer_fold_details = None
 
 
-def _split_df(df: pd.DataFrame):
+def _risk_score(total_pnl: float, max_dd_frac: float) -> float:
+    dd = max(1e-9, float(max_dd_frac))
+    pnl = float(total_pnl)
+    if score_mode.startswith("PnL /"):
+        return pnl / dd
+    return pnl - float(lambda_dd) * dd
+
+
+def _get_num_trades(summ: dict) -> int:
+    if "num_trades" in summ:
+        return int(summ.get("num_trades") or 0)
+    return int(summ.get("n_trades") or 0)
+
+
+def _rolling_folds(df: pd.DataFrame):
     df = df.dropna().copy()
     df = df.sort_values("timestamp").reset_index(drop=True)
     if df.empty:
-        return df, df
+        return []
 
-    if split_mode == "Percent split":
-        n = len(df)
-        n_test = max(1, int(round(n * (test_pct / 100.0))))
-        train = df.iloc[: max(1, n - n_test)].copy()
-        test = df.iloc[max(1, n - n_test):].copy()
-        return train, test
+    end = df["timestamp"].max()
+    start = max(df["timestamp"].min(), end - pd.Timedelta(days=int(lookback_days)))
 
-    cutoff = df["timestamp"].max() - pd.Timedelta(days=int(test_days))
-    train = df[df["timestamp"] < cutoff].copy()
-    test = df[df["timestamp"] >= cutoff].copy()
-    if train.empty:
-        n = len(df)
-        n_train = max(1, n // 2)
-        train = df.iloc[:n_train].copy()
-        test = df.iloc[n_train:].copy()
-    return train, test
+    # Folds are built from the end backwards, then reversed to chronological
+    fold_list = []
+    for k in range(int(folds)):
+        test_end = end - pd.Timedelta(days=int(step_days) * k)
+        test_start = test_end - pd.Timedelta(days=int(test_window_days))
+        train_end = test_start
+        train_start = train_end - pd.Timedelta(days=int(min_train_days))
+
+        # clamp train_start to available start
+        train_start = max(train_start, start)
+
+        train = df[(df["timestamp"] >= train_start) & (df["timestamp"] < train_end)].copy()
+        test = df[(df["timestamp"] >= test_start) & (df["timestamp"] <= test_end)].copy()
+
+        if train.empty or test.empty:
+            continue
+
+        fold_list.append((train_start, train_end, test_start, test_end, train, test))
+
+    return list(reversed(fold_list))
 
 
 if run:
@@ -126,20 +154,27 @@ if run:
 
     trained = {}
     report_rows = []
+    fold_rows = []
+
     prog = st.progress(0, text="Training...")
 
     for i, sym in enumerate(symbols):
         prog.progress(i / max(1, len(symbols)), text=f"Loading data for {sym}...")
-
         since = pd.Timestamp.utcnow() - pd.Timedelta(days=int(lookback_days))
         df = load_or_fetch(sym, timeframe=timeframe, since=since, until=None, force_refresh=force_refresh)
         if df is None or df.empty:
             report_rows.append({"symbol": sym, "status": "NO_DATA"})
             continue
 
-        train_df, test_df = _split_df(df)
+        folds_data = _rolling_folds(df)
+        if not folds_data:
+            report_rows.append({"symbol": sym, "status": "NO_FOLDS"})
+            continue
 
-        prog.progress((i + 0.2) / max(1, len(symbols)), text=f"Optimize train profiles for {sym}...")
+        # Optimize on the most recent fold's train set (fast), evaluate across all folds
+        train_start, train_end, test_start, test_end, train_df, _ = folds_data[-1]
+
+        prog.progress((i + 0.2) / max(1, len(symbols)), text=f"Optimize train profiles for {sym} (latest fold)...")
         profiles, best_train = staged_optimize_regime_profiles(
             sym=sym,
             df=train_df,
@@ -160,27 +195,54 @@ if run:
             search=search,
         )
 
-        prog.progress((i + 0.6) / max(1, len(symbols)), text=f"Evaluate on test for {sym}...")
-        dfs = {sym: test_df}
-        pair_cfg = {sym: dict(base_cfg)}
-        trades_df, equity_curve, decision_log, trader = run_backtest(
-            dfs=dfs,
-            pair_cfg=pair_cfg,
-            timeframe=timeframe,
-            start_cash=float(start_cash),
-            maker_fee=float(maker_fee),
-            taker_fee=float(taker_fee),
-            slippage=float(slippage),
-            fee_mode=str(fee_mode),
-            quote_ccy="EUR",
-            max_exposure_quote={},
-            regime_profiles=profiles,
-            enable_regime_profiles=True,
-            confirm_n=int(confirm_n),
-            cooldown_candles=int(cooldown_candles),
-            rebuild_on_regime_change=False,
-        )
-        test_summ = summarize_run(equity_curve, trades_df)
+        # Evaluate across folds
+        test_scores = []
+        test_pnls = []
+        test_dds = []
+
+        for fidx, (tr_s, tr_e, te_s, te_e, tr_df, te_df) in enumerate(folds_data):
+            dfs = {sym: te_df}
+            pair_cfg = {sym: dict(base_cfg)}
+            trades_df, equity_curve, decision_log, trader = run_backtest(
+                dfs=dfs,
+                pair_cfg=pair_cfg,
+                timeframe=timeframe,
+                start_cash=float(start_cash),
+                maker_fee=float(maker_fee),
+                taker_fee=float(taker_fee),
+                slippage=float(slippage),
+                fee_mode=str(fee_mode),
+                quote_ccy="EUR",
+                max_exposure_quote={},
+                regime_profiles=profiles,
+                enable_regime_profiles=True,
+                confirm_n=int(confirm_n),
+                cooldown_candles=int(cooldown_candles),
+                rebuild_on_regime_change=False,
+            )
+            test_summ = summarize_run(equity_curve, trades_df)
+
+            tpnl = float(test_summ.get("total_pnl", 0.0))
+            tdd = float(test_summ.get("max_drawdown", 0.0))
+            tscore = _risk_score(tpnl, tdd)
+
+            test_scores.append(tscore)
+            test_pnls.append(tpnl)
+            test_dds.append(tdd)
+
+            fold_rows.append({
+                "symbol": sym,
+                "fold": fidx + 1,
+                "train_start": str(tr_s),
+                "train_end": str(tr_e),
+                "test_start": str(te_s),
+                "test_end": str(te_e),
+                "test_total_pnl": tpnl,
+                "test_max_dd_pct": tdd * 100.0,
+                "test_score": tscore,
+                "test_trades": _get_num_trades(test_summ),
+                "test_win_rate_pct": float(test_summ.get("win_rate", 0.0)) * 100.0 if test_summ.get("win_rate") == test_summ.get("win_rate") else float("nan"),
+            })
 
         trained[sym] = {
             "use_regime_profiles": True,
@@ -188,27 +250,37 @@ if run:
             "regime_profiles": profiles,
         }
 
+        # Aggregate report
         report_rows.append({
             "symbol": sym,
             "status": "OK",
             "train_total_pnl": float(best_train.get("total_pnl", 0.0)),
             "train_max_dd_pct": float(best_train.get("max_drawdown", 0.0)) * 100.0,
             "train_win_rate_pct": float(best_train.get("win_rate", 0.0)) * 100.0 if best_train.get("win_rate") == best_train.get("win_rate") else float("nan"),
-            "train_trades": int(best_train.get("num_trades", best_train.get("n_trades", 0))),
-            "test_total_pnl": float(test_summ.get("total_pnl", 0.0)),
-            "test_max_dd_pct": float(test_summ.get("max_drawdown", 0.0)) * 100.0,
-            "test_win_rate_pct": float(test_summ.get("win_rate", 0.0)) * 100.0 if test_summ.get("win_rate") == test_summ.get("win_rate") else float("nan"),
-            "test_trades": int(test_summ.get("num_trades", test_summ.get("n_trades", 0))),
+            "train_trades": _get_num_trades(best_train),
+            "test_score_avg": float(pd.Series(test_scores).mean()),
+            "test_score_med": float(pd.Series(test_scores).median()),
+            "test_total_pnl_avg": float(pd.Series(test_pnls).mean()),
+            "test_max_dd_pct_avg": float(pd.Series(test_dds).mean()) * 100.0,
+            "folds_used": len(test_scores),
         })
 
     prog.progress(1.0, text="Done.")
     st.session_state.trained_profiles = trained
     st.session_state.trainer_report = pd.DataFrame(report_rows)
+    st.session_state.trainer_fold_details = pd.DataFrame(fold_rows)
     st.success("Training complete. Profiles stored in session (and downloadable below).")
 
+# ----------------------------
+# Output
+# ----------------------------
 if st.session_state.trainer_report is not None:
-    st.subheader("Walk-forward report")
+    st.subheader("Multi-fold summary")
     st.dataframe(st.session_state.trainer_report, use_container_width=True, height=260)
+
+if st.session_state.trainer_fold_details is not None:
+    st.subheader("Fold details (test metrics per fold)")
+    st.dataframe(st.session_state.trainer_fold_details, use_container_width=True, height=340)
 
 if st.session_state.trained_profiles:
     st.subheader("Optimized profiles")
