@@ -123,7 +123,7 @@ st.caption(f"Trading status: {'RUNNING' if st.session_state.trading_enabled else
 # Market selection
 # ----------------------------
 st.sidebar.subheader("Market")
-symbols_input = st.sidebar.text_input("Pairs (comma-separated)", "ICNT/EUR, ETH/EUR")
+symbols_input = st.sidebar.text_input("Pairs (comma-separated)", "BTC/EUR, ETH/EUR")
 symbols = [s.strip().upper() for s in symbols_input.split(",") if s.strip()]
 if not symbols:
     st.stop()

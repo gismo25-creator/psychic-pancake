@@ -19,7 +19,7 @@ st.info(
 # Sidebar: data + evaluation setup
 # ----------------------------
 st.sidebar.subheader("Data")
-symbols = st.sidebar.multiselect("Symbols", ["ICNT/EUR", "ETH/EUR", "SOL/EUR", "XRP/EUR", "ADA/EUR"], default=["ICNT/EUR"])
+symbols = st.sidebar.multiselect("Symbols", ["BTC/EUR", "ETH/EUR", "SOL/EUR", "XRP/EUR", "ADA/EUR"], default=["BTC/EUR"])
 timeframe = st.sidebar.selectbox("Timeframe", ["1m", "5m", "15m"], index=1)
 lookback_days = st.sidebar.slider("Lookback (days)", 1, 180, 60)
 force_refresh = st.sidebar.checkbox("Force refresh OHLCV cache", value=False)
@@ -194,11 +194,11 @@ if run:
             "train_total_pnl": float(best_train.get("total_pnl", 0.0)),
             "train_max_dd_pct": float(best_train.get("max_drawdown", 0.0)) * 100.0,
             "train_win_rate_pct": float(best_train.get("win_rate", 0.0)) * 100.0 if best_train.get("win_rate") == best_train.get("win_rate") else float("nan"),
-            "train_trades": int(best_train.get("n_trades", 0)),
+            "train_trades": int(best_train.get("num_trades", best_train.get("n_trades", 0))),
             "test_total_pnl": float(test_summ.get("total_pnl", 0.0)),
             "test_max_dd_pct": float(test_summ.get("max_drawdown", 0.0)) * 100.0,
             "test_win_rate_pct": float(test_summ.get("win_rate", 0.0)) * 100.0 if test_summ.get("win_rate") == test_summ.get("win_rate") else float("nan"),
-            "test_trades": int(test_summ.get("n_trades", 0)),
+            "test_trades": int(test_summ.get("num_trades", test_summ.get("n_trades", 0))),
         })
 
     prog.progress(1.0, text="Done.")
