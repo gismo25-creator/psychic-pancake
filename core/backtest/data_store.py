@@ -9,13 +9,13 @@ import requests
 
 
 def _to_utc_ts(x) -> pd.Timestamp:
-    """Normalize any timestamp-like input to UTC tz-aware pandas Timestamp."""
+    """Normalize any timestamp-like input to UTC tz-aware pandas Timestamp.
+    Works for tz-naive and tz-aware timestamps.
+    """
     ts = pd.Timestamp(x)
     if ts.tzinfo is None:
         return ts.tz_localize('UTC')
     return ts.tz_convert('UTC')
-
-import ccxt
 
 
 def _safe_name(symbol: str) -> str:
@@ -75,7 +75,7 @@ def fetch_ohlcv_range_bitvavo(
     if until is not None:
         until_ts = _to_utc_ts(until)
     else:
-        until_ts = pd.Timestamp.utcnow().tz_localize("UTC")
+        until_ts = pd.Timestamp.now(tz="UTC")
 
     # Bitvavo expects market like BTC-EUR
     market = symbol.replace("/", "-").upper()
