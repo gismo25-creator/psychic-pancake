@@ -93,34 +93,67 @@ def _get_num_trades(summ: dict) -> int:
 
 
 def _rolling_folds(df: pd.DataFrame):
+    """Build rolling walk-forward folds.
+
+    Common NO_FOLDS causes:
+      - not enough history for min_train_days + test_window_days
+      - step/test windows too big vs lookback
+      - timezone / missing timestamps (handled upstream)
+    """
     df = df.dropna().copy()
     df = df.sort_values("timestamp").reset_index(drop=True)
     if df.empty:
-        return []
+        return [], {"reason": "EMPTY_DF"}
 
-    end = df["timestamp"].max()
-    start = max(df["timestamp"].min(), end - pd.Timedelta(days=int(lookback_days)))
+    end_ts = df["timestamp"].max()
+    start_ts = df["timestamp"].min()
 
-    # Folds are built from the end backwards, then reversed to chronological
+    need_days = int(min_train_days) + int(test_window_days)
+    have_days = max(0.0, (end_ts - start_ts) / pd.Timedelta(days=1))
+
+    # If user asks for more lookback than exists, just use what we have.
+    if have_days < need_days:
+        return [], {
+            "reason": "INSUFFICIENT_HISTORY",
+            "have_days": float(have_days),
+            "need_days": float(need_days),
+            "start": str(start_ts),
+            "end": str(end_ts),
+        }
+
     fold_list = []
+    # Build folds from the end backwards
     for k in range(int(folds)):
-        test_end = end - pd.Timedelta(days=int(step_days) * k)
+        test_end = end_ts - pd.Timedelta(days=int(step_days) * k)
         test_start = test_end - pd.Timedelta(days=int(test_window_days))
         train_end = test_start
         train_start = train_end - pd.Timedelta(days=int(min_train_days))
 
-        # clamp train_start to available start
-        train_start = max(train_start, start)
+        # Ensure bounds are within available data
+        if train_start < start_ts:
+            train_start = start_ts
 
         train = df[(df["timestamp"] >= train_start) & (df["timestamp"] < train_end)].copy()
         test = df[(df["timestamp"] >= test_start) & (df["timestamp"] <= test_end)].copy()
 
-        if train.empty or test.empty:
+        # Require at least some rows in both sets
+        if len(train) < 50 or len(test) < 20:
             continue
 
         fold_list.append((train_start, train_end, test_start, test_end, train, test))
 
-    return list(reversed(fold_list))
+    if not fold_list:
+        return [], {
+            "reason": "WINDOWS_TOO_STRICT",
+            "have_days": float(have_days),
+            "need_days": float(need_days),
+            "start": str(start_ts),
+            "end": str(end_ts),
+            "hint": "Reduce min_train_days / test_window_days / folds, or increase lookback_days / use larger timeframe.",
+        }
+
+    return list(reversed(fold_list)), {"reason": "OK", "folds": len(fold_list), "start": str(start_ts), "end": str(end_ts)}
+
 
 
 if run:
@@ -166,10 +199,27 @@ if run:
             report_rows.append({"symbol": sym, "status": "NO_DATA"})
             continue
 
-        folds_data = _rolling_folds(df)
+        folds_data, folds_dbg = _rolling_folds(df)
         if not folds_data:
-            report_rows.append({"symbol": sym, "status": "NO_FOLDS"})
-            continue
+            # Fallback: percent split 70/30 so we still produce a result if possible
+            n = len(df)
+            if n >= 100:
+                n_test = max(20, int(round(n * 0.30)))
+                train_df = df.iloc[: max(50, n - n_test)].copy()
+                test_df = df.iloc[max(50, n - n_test):].copy()
+                folds_data = [(
+                    train_df["timestamp"].min(), train_df["timestamp"].max(),
+                    test_df["timestamp"].min(), test_df["timestamp"].max(),
+                    train_df, test_df
+                )]
+                folds_dbg = {"reason": "FALLBACK_PERCENT_SPLIT", **(folds_dbg or {})}
+            else:
+                report_rows.append({"symbol": sym, "status": "NO_FOLDS", **(folds_dbg or {})})
+                continue
+
+        # Optional debug panel
+        with st.expander(f"{sym} fold debug", expanded=False):
+            st.json(folds_dbg)
 
         # Optimize on the most recent fold's train set (fast), evaluate across all folds
         train_start, train_end, test_start, test_end, train_df, _ = folds_data[-1]
