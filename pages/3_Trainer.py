@@ -68,6 +68,18 @@ os_mult_candidates = st.sidebar.multiselect("Order-size mult candidates", [0.4,0
 cycle_tp_enable = st.sidebar.multiselect("Cycle TP enable", [False, True], default=[False, True])
 cycle_tp_pcts = st.sidebar.multiselect("Cycle TP (%) candidates", [0.15,0.20,0.35,0.50,0.80,1.00], default=[0.20,0.35,0.50,0.80])
 
+st.sidebar.subheader("Training speed")
+max_evals_per_regime = st.sidebar.slider(
+    "Max evals per regime (sampled)",
+    min_value=20,
+    max_value=800,
+    value=150,
+    step=10,
+    help="Begrenst het aantal backtests per regime door random sampling. Lager = sneller.",
+)
+rng_seed = st.sidebar.number_input("Random seed", min_value=0, value=1337, step=1)
+
+
 run = st.sidebar.button("▶ Train (multi-fold WF)", width="stretch")
 
 if "trained_profiles" not in st.session_state:
@@ -225,6 +237,11 @@ if run:
         train_start, train_end, test_start, test_end, train_df, _ = folds_data[-1]
 
         prog.progress((i + 0.2) / max(1, len(symbols)), text=f"Optimize train profiles for {sym} (latest fold)...")
+        status_ph = st.empty()
+
+        def progress_cb(regime: str, done: int, total: int):
+            status_ph.info(f"{sym} | optimizing {regime}: {done}/{total} evals")
+
         profiles, best_train = staged_optimize_regime_profiles(
             sym=sym,
             df=train_df,
@@ -243,6 +260,9 @@ if run:
             dd_penalty=float(dd_penalty),
             trade_penalty=float(trade_penalty),
             search=search,
+            max_evals_per_regime=int(max_evals_per_regime),
+            seed=int(rng_seed),
+            progress_cb=progress_cb,
         )
 
         # Evaluate across folds
