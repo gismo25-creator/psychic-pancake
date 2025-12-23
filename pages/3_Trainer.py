@@ -21,7 +21,7 @@ st.info(
 st.sidebar.subheader("Data")
 symbols = st.sidebar.multiselect(
     "Symbols",
-    ["BTC/EUR", "ETH/EUR", "SOL/EUR", "ICNT/EUR", "ADA/EUR"],
+    ["BTC/EUR", "ETH/EUR", "SOL/EUR", "XRP/EUR", "ADA/EUR"],
     default=["BTC/EUR"],
 )
 timeframe = st.sidebar.selectbox("Timeframe", ["1m", "5m", "15m"], index=1)
@@ -208,6 +208,7 @@ def _rolling_folds(df: pd.DataFrame):
 
 
 if run:
+    prog = st.progress(0, text='Training...')
     if not symbols:
         st.sidebar.error("Select at least one symbol.")
         st.stop()
