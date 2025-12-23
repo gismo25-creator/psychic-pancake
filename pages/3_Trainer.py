@@ -10,6 +10,14 @@ from core.backtest.replay import run_backtest
 from core.backtest.metrics import summarize_run
 from core.training.regime_optimizer import SearchSpace, staged_optimize_regime_profiles
 
+def _git_commit() -> str:
+    """Best-effort git commit hash; returns empty string if git is unavailable."""
+    try:
+        import subprocess
+        return subprocess.check_output(["git","rev-parse","--short","HEAD"], stderr=subprocess.DEVNULL).decode().strip()
+    except Exception:
+        return ""
+
 st.set_page_config(layout="wide")
 st.title("Trainer – Offline tuning (interpretable profiles + multi-fold walk-forward)")
 
@@ -748,7 +756,7 @@ if run:
         "restarts": int(restarts),
         "rng_seed": int(rng_seed),
         "fees": {"maker": float(maker_fee), "taker": float(taker_fee), "slippage": float(slippage), "mode": str(fee_mode)},
-        "git_commit": _git_commit(),
+        "git_commit": ((_git_commit() if "_git_commit" in globals() else "") if "_git_commit" in globals() else ""),
         "data_hashes": data_hashes,
     }
 
