@@ -138,3 +138,88 @@ def diff_profiles(current_pair_cfg: Dict[str, Any], new_profiles: Dict[str, Any]
         if changed:
             out["changed"][sym] = changed
     return out
+
+
+# --- Promotion / Audit utilities ---
+ACTIVE_BUNDLE_NAME = "active.json"
+ACTIVE_HISTORY_DIR = os.path.join(DEFAULT_STORE_DIR, "active_history")
+AUDIT_LOG_PATH = os.path.join(DEFAULT_STORE_DIR, "audit_log.jsonl")
+
+
+def append_audit(event: str, payload: Dict[str, Any], store_dir: str = DEFAULT_STORE_DIR) -> str:
+    ensure_store_dir(store_dir)
+    path = os.path.join(store_dir, "audit_log.jsonl")
+    rec = {"ts": utc_now_iso(), "event": event, **payload}
+    with open(path, "a", encoding="utf-8") as f:
+        f.write(json.dumps(rec, default=str) + "\n")
+    return path
+
+
+def active_path(store_dir: str = DEFAULT_STORE_DIR) -> str:
+    return os.path.join(store_dir, ACTIVE_BUNDLE_NAME)
+
+
+def history_dir(store_dir: str = DEFAULT_STORE_DIR) -> str:
+    p = os.path.join(store_dir, "active_history")
+    os.makedirs(p, exist_ok=True)
+    return p
+
+
+def promote_to_active(bundle: Dict[str, Any], store_dir: str = DEFAULT_STORE_DIR, note: str = "") -> Tuple[str, str]:
+    """Promote bundle to ACTIVE, keeping previous ACTIVE in history."""
+    sd = ensure_store_dir(store_dir)
+    ap = active_path(sd)
+    hd = history_dir(sd)
+
+    # backup existing active
+    prev = ""
+    if os.path.isfile(ap):
+        prev = ap
+        stamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+        backup = os.path.join(hd, f"active_{stamp}.json")
+        with open(ap, "r", encoding="utf-8") as fsrc:
+            prev_blob = fsrc.read()
+        with open(backup, "w", encoding="utf-8") as fdst:
+            fdst.write(prev_blob)
+
+    # write new active
+    with open(ap, "w", encoding="utf-8") as f:
+        json.dump(bundle, f, indent=2, sort_keys=False, default=str)
+
+    append_audit("promoted_active", {
+        "note": note,
+        "bundle_created_at": bundle.get("created_at"),
+        "bundle_meta": bundle.get("meta", {}),
+        "bundle_symbols": sorted(list((bundle.get("profiles") or {}).keys())),
+    }, store_dir=sd)
+
+    return ap, (backup if os.path.isfile(ap) and prev else "")
+
+
+def list_active_history(store_dir: str = DEFAULT_STORE_DIR) -> List[str]:
+    hd = history_dir(store_dir)
+    files = [f for f in os.listdir(hd) if f.lower().endswith(".json")]
+    files.sort(reverse=True)
+    return [os.path.join(hd, f) for f in files]
+
+
+def rollback_active(store_dir: str = DEFAULT_STORE_DIR, history_path: str = "") -> str:
+    sd = ensure_store_dir(store_dir)
+    ap = active_path(sd)
+    hd = history_dir(sd)
+
+    if history_path:
+        src = history_path
+    else:
+        hist = list_active_history(sd)
+        if not hist:
+            raise FileNotFoundError("No active history to roll back to.")
+        src = hist[0]
+
+    with open(src, "r", encoding="utf-8") as f:
+        blob = f.read()
+    with open(ap, "w", encoding="utf-8") as f:
+        f.write(blob)
+
+    append_audit("rollback_active", {"from": os.path.basename(src)}, store_dir=sd)
+    return ap

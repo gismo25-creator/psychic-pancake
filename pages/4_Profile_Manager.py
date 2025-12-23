@@ -5,7 +5,10 @@ import streamlit as st
 import pandas as pd
 import copy
 
-from core.profiles.registry import list_bundles, load_bundle, validate_bundle, diff_profiles, save_bundle, ensure_store_dir
+from core.profiles.registry import (
+    list_bundles, load_bundle, validate_bundle, diff_profiles, save_bundle, ensure_store_dir,
+    active_path, load_bundle as _lb, promote_to_active, list_active_history, rollback_active, append_audit
+)
 from core.backtest.replay import run_backtest
 from core.backtest.metrics import summarize_run
 from core.backtest.data_store import load_or_fetch
@@ -14,6 +17,13 @@ st.set_page_config(layout="wide")
 st.title("Profile Manager (Governance)")
 
 store_dir = ensure_store_dir()
+st.sidebar.subheader("ACTIVE")
+ap = active_path(store_dir)
+if Path(ap).is_file():
+    st.sidebar.caption(f"Active: {Path(ap).name}")
+else:
+    st.sidebar.caption("Active: (none)")
+
 
 st.sidebar.subheader("Stored bundles")
 files = list_bundles(store_dir)
@@ -206,6 +216,48 @@ if cache:
 # Gate apply: require sanity PASS by default
 st.session_state["sanity_pass_for_bundle"] = sanity_pass
 
+st.subheader("Promotion")
+st.caption("Workflow: Sanity PASS → Promote to ACTIVE → (optioneel) Rollback via history.")
+
+# Expect sanity results in session_state if the sanity test was run on this page.
+sanity_ok = bool(st.session_state.get("sanity_pass", False))
+sanity_summary = st.session_state.get("sanity_summary", {})
+if sanity_summary:
+    st.caption(f"Last sanity: {'PASS' if sanity_ok else 'FAIL'} | {sanity_summary}")
+else:
+    st.info("Run the Sanity Backtest above to enable promotion.")
+
+note = st.text_input("Promotion note (optional)", value="")
+if st.button("Promote this bundle to ACTIVE", disabled=(not sanity_ok)):
+    apath, _ = promote_to_active(bundle, store_dir=store_dir, note=note)
+    st.success(f"Promoted to {apath}")
+
+st.subheader("Rollback ACTIVE")
+hist = list_active_history(store_dir)
+if not hist:
+    st.caption("No active history available yet.")
+else:
+    pick = st.selectbox("Select history to roll back to", hist, format_func=lambda p: Path(p).name)
+    if st.button("Rollback ACTIVE to selected"):
+        apath = rollback_active(store_dir=store_dir, history_path=pick)
+        st.success(f"Rolled back ACTIVE to {apath}")
+
+st.subheader("Audit log")
+audit_path = Path(store_dir) / "audit_log.jsonl"
+if audit_path.is_file():
+    tail_n = st.slider("Show last N events", 10, 200, 50, step=10)
+    lines = audit_path.read_text(encoding="utf-8").splitlines()[-tail_n:]
+    events = []
+    for ln in lines:
+        try:
+            events.append(json.loads(ln))
+        except Exception:
+            continue
+    st.json(events)
+else:
+    st.caption("No audit log yet.")
+
+
 st.subheader("Apply to session")
 confirm = st.checkbox("I understand this overwrites per-symbol settings in this session.")
 require_sanity = st.checkbox("Require sanity PASS to apply", value=True)
@@ -215,10 +267,12 @@ if st.button("Apply bundle", disabled=(not ok or not confirm or not sanity_ok)):
     for sym, cfg in profiles.items():
         sym_u = str(sym).upper()
         st.session_state.pair_cfg.setdefault(sym_u, {}).update(cfg)
+    append_audit("applied_bundle_session", {"bundle": bundle_path, "symbols": sorted(list(profiles.keys()))}, store_dir=store_dir)
     st.success("Applied to session_state.pair_cfg.")
 
 st.subheader("Save a copy to disk")
 name = st.text_input("Save as", value=Path(bundle_path).name.replace(".json","") if bundle_path else "profile_copy")
 if st.button("Save bundle"):
     p = save_bundle(bundle, store_dir=store_dir, name=name)
+    append_audit("saved_bundle_copy", {"saved_path": p, "source": bundle_path}, store_dir=store_dir)
     st.success(f"Saved to {p}")
