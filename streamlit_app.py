@@ -269,6 +269,9 @@ streak_scope = st.sidebar.slider("Streak scope (closed cycles)", 20, 2000, 300, 
 # ----------------------------
 # Per-pair grid settings
 # ----------------------------
+st.sidebar.subheader("Governance")
+st.sidebar.caption("Gebruik de Profile Manager pagina voor diff/validatie en apply.")
+
 st.sidebar.subheader("Per-pair grid settings")
 
 st.sidebar.subheader("Profiles import/export")

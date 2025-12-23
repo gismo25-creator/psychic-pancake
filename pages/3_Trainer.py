@@ -1,6 +1,9 @@
+from pathlib import Path
 import json
 import pandas as pd
 import streamlit as st
+
+from core.profiles.registry import make_bundle, save_bundle, stable_hash_df, ensure_store_dir
 
 from core.backtest.data_store import load_or_fetch
 from core.backtest.replay import run_backtest
@@ -21,7 +24,7 @@ st.info(
 st.sidebar.subheader("Data")
 symbols = st.sidebar.multiselect(
     "Symbols",
-    ["BTC/EUR", "ETH/EUR", "SOL/EUR", "XRP/EUR", "ICNT/EUR"],
+    ["BTC/EUR", "ETH/EUR", "SOL/EUR", "XRP/EUR", "ADA/EUR"],
     default=["BTC/EUR"],
 )
 timeframe = st.sidebar.selectbox("Timeframe", ["1m", "5m", "15m"], index=1)
@@ -722,6 +725,45 @@ if run:
     st.session_state.trained_profiles = trained
     st.session_state.trained_profiles_best = trained
     st.session_state.trainer_report = pd.DataFrame(report_rows)
+    # --- Governance export: bundle with metadata + data hashes (saved to disk)
+    store_dir = ensure_store_dir()
+    data_hashes = {}
+    try:
+        if "df_cache" in locals():
+            for sym_k, df_ in df_cache.items():
+                data_hashes[str(sym_k).upper()] = stable_hash_df(df_)
+    except Exception:
+        pass
+
+    meta = {
+        "mode": "GLOBAL" if global_best else "PER_SYMBOL",
+        "symbols": [str(s).upper() for s in symbols],
+        "timeframe": timeframe,
+        "lookback_days": int(lookback_days),
+        "folds": int(folds),
+        "test_window_days": int(test_window_days),
+        "step_days": int(step_days),
+        "min_train_days": int(min_train_days),
+        "max_evals_per_regime": int(max_evals_per_regime),
+        "restarts": int(restarts),
+        "rng_seed": int(rng_seed),
+        "fees": {"maker": float(maker_fee), "taker": float(taker_fee), "slippage": float(slippage), "mode": str(fee_mode)},
+        "git_commit": _git_commit(),
+        "data_hashes": data_hashes,
+    }
+
+    bundle = make_bundle(trained, meta)
+    default_name = f"bundle_{meta['mode'].lower()}_{timeframe}_{pd.Timestamp.utcnow().strftime('%Y%m%d_%H%M%S')}"
+    saved_path = save_bundle(bundle, store_dir=store_dir, name=default_name)
+
+    st.success(f"Saved profile bundle: {saved_path}")
+    st.download_button(
+        "Download bundle JSON",
+        data=json.dumps(bundle, indent=2).encode("utf-8"),
+        file_name=Path(saved_path).name,
+        mime="application/json",
+        use_container_width=True,
+    )
     st.session_state.trainer_fold_details = pd.DataFrame(fold_rows)
     st.success("Training complete. Profiles stored in session (and downloadable below).")
 
