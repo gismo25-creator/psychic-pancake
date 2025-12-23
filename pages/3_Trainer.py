@@ -244,226 +244,20 @@ if run:
     prog = st.progress(0, text="Training...")
 
     # If global_best: build folds per symbol first, then select ONE shared profile set.
-if global_best:
-    sym_data = {}
-    sym_dbg = {}
-    for i, sym in enumerate(symbols):
-        prog.progress(i / max(1, len(symbols)), text=f"Loading data for {sym}...")
-        since = pd.Timestamp.utcnow() - pd.Timedelta(days=int(lookback_days))
-        df = load_or_fetch(sym, timeframe=timeframe, since=since, until=None, force_refresh=force_refresh)
-        if df is None or df.empty:
-            sym_dbg[sym] = {"status": "NO_DATA"}
-            continue
-
-        folds_data, folds_dbg = _rolling_folds(df)
-        if not folds_data:
-            # fallback percent split 70/30
-            n = len(df)
-            if n >= 100:
-                n_test = max(20, int(round(n * 0.30)))
-                train_df = df.iloc[: max(50, n - n_test)].copy()
-                test_df = df.iloc[max(50, n - n_test):].copy()
-                folds_data = [(
-                    train_df["timestamp"].min(), train_df["timestamp"].max(),
-                    test_df["timestamp"].min(), test_df["timestamp"].max(),
-                    train_df, test_df
-                )]
-                folds_dbg = {"reason": "FALLBACK_PERCENT_SPLIT", **(folds_dbg or {})}
-            else:
-                sym_dbg[sym] = {"status": "NO_FOLDS", **(folds_dbg or {})}
-                continue
-
-        sym_data[sym] = {"folds": folds_data}
-        sym_dbg[sym] = {"status": "OK", **(folds_dbg or {})}
-
-    if not sym_data:
-        report_rows.append({"symbol": "GLOBAL", "status": "NO_DATA_OR_FOLDS"})
-    else:
-        primary = next(iter(sym_data.keys()))
-        primary_folds = sym_data[primary]["folds"]
-        train_start, train_end, test_start, test_end, train_df, _ = primary_folds[-1]
-
-        def _eval_profiles_global(profiles_i):
-            test_scores, test_pnls, test_dds, test_trades = [], [], [], []
-            for sym2, blob in sym_data.items():
-                folds2 = blob["folds"]
-                for fidx, (tr_s, tr_e, te_s, te_e, tr_df2, te_df) in enumerate(folds2):
-                    dfs = {sym2: te_df}
-                    pair_cfg = {sym2: dict(base_cfg)}
-                    trades_df, equity_curve, decision_log, trader = run_backtest(
-                        dfs=dfs,
-                        pair_cfg=pair_cfg,
-                        timeframe=timeframe,
-                        start_cash=float(start_cash),
-                        maker_fee=float(maker_fee),
-                        taker_fee=float(taker_fee),
-                        slippage=float(slippage),
-                        fee_mode=str(fee_mode),
-                        quote_ccy="EUR",
-                        max_exposure_quote={},
-                        regime_profiles=profiles_i,
-                        enable_regime_profiles=True,
-                        confirm_n=int(confirm_n),
-                        cooldown_candles=int(cooldown_candles),
-                        rebuild_on_regime_change=False,
-                    )
-                    test_summ = summarize_run(equity_curve, trades_df)
-                    tpnl = float(test_summ.get("total_pnl", 0.0))
-                    tdd = float(test_summ.get("max_drawdown", 0.0))
-                    tscore = _risk_score(tpnl, tdd)
-                    test_scores.append(tscore)
-                    test_pnls.append(tpnl)
-                    test_dds.append(tdd)
-                    test_trades.append(_get_num_trades(test_summ))
-
-            score_avg = float(pd.Series(test_scores).mean()) if test_scores else float("nan")
-            score_med = float(pd.Series(test_scores).median()) if test_scores else float("nan")
-            pnl_avg = float(pd.Series(test_pnls).mean()) if test_pnls else 0.0
-            dd_worst = float(pd.Series(test_dds).max()) if test_dds else 1.0
-            dd_avg = float(pd.Series(test_dds).mean()) if test_dds else 1.0
-            trades_avg = float(pd.Series(test_trades).mean()) if test_trades else 0.0
-            return score_avg, score_med, pnl_avg, dd_worst, dd_avg, trades_avg
-
-        cand_rows = []
-        best_profiles = None
-        best_test_score = None
-        best_test_score_med = None
-        best_dbg = None
-
-        for r in range(int(restarts)):
-            seed_i = int(rng_seed) + 1000 * r
-            prog.progress(0.25, text=f"Optimize GLOBAL (restart {r+1}/{restarts}) on {primary}...")
-
-            profiles_i, best_train_i = staged_optimize_regime_profiles(
-                sym=primary,
-                df=train_df,
-                base_cfg=base_cfg,
-                base_profiles=base_profiles,
-                timeframe=timeframe,
-                start_cash=float(start_cash),
-                maker_fee=float(maker_fee),
-                taker_fee=float(taker_fee),
-                slippage=float(slippage),
-                fee_mode=fee_mode,
-                quote_ccy="EUR",
-                caps={},
-                confirm_n=int(confirm_n),
-                cooldown_candles=int(cooldown_candles),
-                dd_penalty=float(dd_penalty),
-                trade_penalty=float(trade_penalty),
-                search=search,
-                max_evals_per_regime=int(max_evals_per_regime),
-                seed=int(seed_i),
-                progress_cb=None,
-            )
-
-            score_avg, score_med, pnl_avg, dd_worst, dd_avg, trades_avg = _eval_profiles_global(profiles_i)
-            eligible = (trades_avg >= float(min_test_trades_avg)) and ((dd_worst * 100.0) <= float(max_test_dd_cap_pct))
-
-            cand_rows.append({
-                "restart": r + 1,
-                "seed": seed_i,
-                "eligible": bool(eligible),
-                "global_test_score_avg": score_avg,
-                "global_test_score_med": score_med,
-                "global_test_pnl_avg": pnl_avg,
-                "global_test_dd_worst_pct": dd_worst * 100.0,
-                "global_test_dd_avg_pct": dd_avg * 100.0,
-                "global_test_trades_avg": trades_avg,
-                "primary_symbol": primary,
-            })
-
-            if eligible:
-                better = False
-                if best_test_score is None or score_avg > best_test_score:
-                    better = True
-                elif best_test_score is not None and score_avg == best_test_score and use_median_tiebreak:
-                    if best_test_score_med is None or score_med > best_test_score_med:
-                        better = True
-
-                if better:
-                    best_profiles = profiles_i
-                    best_test_score = score_avg
-                    best_test_score_med = score_med
-                    best_dbg = {"seed": seed_i, "restart": r + 1, "score_avg": score_avg, "score_med": score_med, "dd_worst_pct": dd_worst*100.0, "trades_avg": trades_avg}
-
-        cand_df = pd.DataFrame(cand_rows).sort_values(["eligible", "global_test_score_avg", "global_test_score_med"], ascending=[False, False, False])
-        with st.expander("GLOBAL best-overall candidates", expanded=True):
-            st.dataframe(cand_df, use_container_width=True, height=280)
-            st.caption(f"Symbols used: {', '.join(sym_data.keys())}")
-            if best_dbg:
-                st.caption(
-                    f"Selected GLOBAL: restart {best_dbg['restart']} (seed {best_dbg['seed']}) | "
-                    f"score avg {best_dbg['score_avg']:.3f} | median {best_dbg['score_med']:.3f} | "
-                    f"worst DD {best_dbg['dd_worst_pct']:.2f}% | avg trades {best_dbg['trades_avg']:.1f}"
-                )
-            else:
-                st.warning("No eligible GLOBAL candidate found under current constraints; falling back to best by score.")
-
-        if best_profiles is None and not cand_df.empty:
-            best_profiles = None
-            best_profiles_seed = int(cand_df.iloc[0]["seed"])
-            best_profiles, _ = staged_optimize_regime_profiles(
-                sym=primary,
-                df=train_df,
-                base_cfg=base_cfg,
-                base_profiles=base_profiles,
-                timeframe=timeframe,
-                start_cash=float(start_cash),
-                maker_fee=float(maker_fee),
-                taker_fee=float(taker_fee),
-                slippage=float(slippage),
-                fee_mode=fee_mode,
-                quote_ccy="EUR",
-                caps={},
-                confirm_n=int(confirm_n),
-                cooldown_candles=int(cooldown_candles),
-                dd_penalty=float(dd_penalty),
-                trade_penalty=float(trade_penalty),
-                search=search,
-                max_evals_per_regime=int(max_evals_per_regime),
-                seed=int(best_profiles_seed),
-                progress_cb=None,
-            )
-
-        # Apply same profiles to all symbols
-        for sym2 in sym_data.keys():
-            trained[sym2] = {
-                "use_regime_profiles": True,
-                "regime_profile_rebuild": False,
-                "regime_profiles": best_profiles,
-            }
-
-        score_avg, score_med, pnl_avg, dd_worst, dd_avg, trades_avg = _eval_profiles_global(best_profiles)
-        report_rows.append({
-            "symbol": "GLOBAL",
-            "status": "OK",
-            "primary_symbol": primary,
-            "symbols_used": ", ".join(sym_data.keys()),
-            "test_score_avg": score_avg,
-            "test_score_med": score_med,
-            "test_total_pnl_avg": pnl_avg,
-            "test_max_dd_worst_pct": dd_worst * 100.0,
-            "test_max_dd_avg_pct": dd_avg * 100.0,
-            "test_trades_avg": trades_avg,
-            "folds_used_total": sum(len(v["folds"]) for v in sym_data.values()),
-        })
-
-        with st.expander("GLOBAL fold debug per symbol", expanded=False):
-            st.json(sym_dbg)
-
-else:
-    for i, sym in enumerate(symbols):
+    if global_best:
+        sym_data = {}
+        sym_dbg = {}
+        for i, sym in enumerate(symbols):
             prog.progress(i / max(1, len(symbols)), text=f"Loading data for {sym}...")
             since = pd.Timestamp.utcnow() - pd.Timedelta(days=int(lookback_days))
             df = load_or_fetch(sym, timeframe=timeframe, since=since, until=None, force_refresh=force_refresh)
             if df is None or df.empty:
-                report_rows.append({"symbol": sym, "status": "NO_DATA"})
+                sym_dbg[sym] = {"status": "NO_DATA"}
                 continue
 
             folds_data, folds_dbg = _rolling_folds(df)
             if not folds_data:
-                # Fallback: percent split 70/30 so we still produce a result if possible
+                # fallback percent split 70/30
                 n = len(df)
                 if n >= 100:
                     n_test = max(20, int(round(n * 0.30)))
@@ -476,63 +270,52 @@ else:
                     )]
                     folds_dbg = {"reason": "FALLBACK_PERCENT_SPLIT", **(folds_dbg or {})}
                 else:
-                    report_rows.append({"symbol": sym, "status": "NO_FOLDS", **(folds_dbg or {})})
+                    sym_dbg[sym] = {"status": "NO_FOLDS", **(folds_dbg or {})}
                     continue
 
-            # Optional debug panel
-            with st.expander(f"{sym} fold debug", expanded=False):
-                st.json(folds_dbg)
+            sym_data[sym] = {"folds": folds_data}
+            sym_dbg[sym] = {"status": "OK", **(folds_dbg or {})}
 
-            # Optimize on the most recent fold's train set (fast), evaluate across all folds
-            train_start, train_end, test_start, test_end, train_df, _ = folds_data[-1]
+        if not sym_data:
+            report_rows.append({"symbol": "GLOBAL", "status": "NO_DATA_OR_FOLDS"})
+        else:
+            primary = next(iter(sym_data.keys()))
+            primary_folds = sym_data[primary]["folds"]
+            train_start, train_end, test_start, test_end, train_df, _ = primary_folds[-1]
 
-            prog.progress((i + 0.2) / max(1, len(symbols)), text=f"Optimize train profiles for {sym} (latest fold)...")
-            status_ph = st.empty()
+            def _eval_profiles_global(profiles_i):
+                test_scores, test_pnls, test_dds, test_trades = [], [], [], []
+                for sym2, blob in sym_data.items():
+                    folds2 = blob["folds"]
+                    for fidx, (tr_s, tr_e, te_s, te_e, tr_df2, te_df) in enumerate(folds2):
+                        dfs = {sym2: te_df}
+                        pair_cfg = {sym2: dict(base_cfg)}
+                        trades_df, equity_curve, decision_log, trader = run_backtest(
+                            dfs=dfs,
+                            pair_cfg=pair_cfg,
+                            timeframe=timeframe,
+                            start_cash=float(start_cash),
+                            maker_fee=float(maker_fee),
+                            taker_fee=float(taker_fee),
+                            slippage=float(slippage),
+                            fee_mode=str(fee_mode),
+                            quote_ccy="EUR",
+                            max_exposure_quote={},
+                            regime_profiles=profiles_i,
+                            enable_regime_profiles=True,
+                            confirm_n=int(confirm_n),
+                            cooldown_candles=int(cooldown_candles),
+                            rebuild_on_regime_change=False,
+                        )
+                        test_summ = summarize_run(equity_curve, trades_df)
+                        tpnl = float(test_summ.get("total_pnl", 0.0))
+                        tdd = float(test_summ.get("max_drawdown", 0.0))
+                        tscore = _risk_score(tpnl, tdd)
+                        test_scores.append(tscore)
+                        test_pnls.append(tpnl)
+                        test_dds.append(tdd)
+                        test_trades.append(_get_num_trades(test_summ))
 
-            def progress_cb(regime: str, done: int, total: int):
-                status_ph.info(f"{sym} | optimizing {regime}: {done}/{total} evals")
-            # --- Best-overall selection: try multiple restarts (different seeds),
-            # pick the profile-set that maximizes average test score over folds, with stability filters.
-            cand_rows = []
-            best_profiles = None
-            best_train = None
-            best_test_score = None
-            best_test_score_med = None
-            best_dbg = None
-
-            def _eval_profiles_on_folds(profiles_i):
-                test_scores = []
-                test_pnls = []
-                test_dds = []
-                test_trades = []
-                for fidx, (tr_s, tr_e, te_s, te_e, tr_df2, te_df) in enumerate(folds_data):
-                    dfs = {sym: te_df}
-                    pair_cfg = {sym: dict(base_cfg)}
-                    trades_df, equity_curve, decision_log, trader = run_backtest(
-                        dfs=dfs,
-                        pair_cfg=pair_cfg,
-                        timeframe=timeframe,
-                        start_cash=float(start_cash),
-                        maker_fee=float(maker_fee),
-                        taker_fee=float(taker_fee),
-                        slippage=float(slippage),
-                        fee_mode=str(fee_mode),
-                        quote_ccy="EUR",
-                        max_exposure_quote={},
-                        regime_profiles=profiles_i,
-                        enable_regime_profiles=True,
-                        confirm_n=int(confirm_n),
-                        cooldown_candles=int(cooldown_candles),
-                        rebuild_on_regime_change=False,
-                    )
-                    test_summ = summarize_run(equity_curve, trades_df)
-                    tpnl = float(test_summ.get("total_pnl", 0.0))
-                    tdd = float(test_summ.get("max_drawdown", 0.0))
-                    tscore = _risk_score(tpnl, tdd)
-                    test_scores.append(tscore)
-                    test_pnls.append(tpnl)
-                    test_dds.append(tdd)
-                    test_trades.append(_get_num_trades(test_summ))
                 score_avg = float(pd.Series(test_scores).mean()) if test_scores else float("nan")
                 score_med = float(pd.Series(test_scores).median()) if test_scores else float("nan")
                 pnl_avg = float(pd.Series(test_pnls).mean()) if test_pnls else 0.0
@@ -541,12 +324,18 @@ else:
                 trades_avg = float(pd.Series(test_trades).mean()) if test_trades else 0.0
                 return score_avg, score_med, pnl_avg, dd_worst, dd_avg, trades_avg
 
+            cand_rows = []
+            best_profiles = None
+            best_test_score = None
+            best_test_score_med = None
+            best_dbg = None
+
             for r in range(int(restarts)):
                 seed_i = int(rng_seed) + 1000 * r
+                prog.progress(0.25, text=f"Optimize GLOBAL (restart {r+1}/{restarts}) on {primary}...")
 
-                # Train on latest fold's train set (fast), sampled within each regime
                 profiles_i, best_train_i = staged_optimize_regime_profiles(
-                    sym=sym,
+                    sym=primary,
                     df=train_df,
                     base_cfg=base_cfg,
                     base_profiles=base_profiles,
@@ -568,25 +357,22 @@ else:
                     progress_cb=None,
                 )
 
-                score_avg, score_med, pnl_avg, dd_worst, dd_avg, trades_avg = _eval_profiles_on_folds(profiles_i)
+                score_avg, score_med, pnl_avg, dd_worst, dd_avg, trades_avg = _eval_profiles_global(profiles_i)
                 eligible = (trades_avg >= float(min_test_trades_avg)) and ((dd_worst * 100.0) <= float(max_test_dd_cap_pct))
 
                 cand_rows.append({
                     "restart": r + 1,
                     "seed": seed_i,
                     "eligible": bool(eligible),
-                    "test_score_avg": score_avg,
-                    "test_score_med": score_med,
-                    "test_pnl_avg": pnl_avg,
-                    "test_dd_worst_pct": dd_worst * 100.0,
-                    "test_dd_avg_pct": dd_avg * 100.0,
-                    "test_trades_avg": trades_avg,
-                    "train_total_pnl": float(best_train_i.get("total_pnl", 0.0)),
-                    "train_max_dd_pct": float(best_train_i.get("max_drawdown", 0.0)) * 100.0,
-                    "train_trades": _get_num_trades(best_train_i),
+                    "global_test_score_avg": score_avg,
+                    "global_test_score_med": score_med,
+                    "global_test_pnl_avg": pnl_avg,
+                    "global_test_dd_worst_pct": dd_worst * 100.0,
+                    "global_test_dd_avg_pct": dd_avg * 100.0,
+                    "global_test_trades_avg": trades_avg,
+                    "primary_symbol": primary,
                 })
 
-                # Select best eligible
                 if eligible:
                     better = False
                     if best_test_score is None or score_avg > best_test_score:
@@ -597,32 +383,28 @@ else:
 
                     if better:
                         best_profiles = profiles_i
-                        best_train = best_train_i
                         best_test_score = score_avg
                         best_test_score_med = score_med
                         best_dbg = {"seed": seed_i, "restart": r + 1, "score_avg": score_avg, "score_med": score_med, "dd_worst_pct": dd_worst*100.0, "trades_avg": trades_avg}
 
-            cand_df = pd.DataFrame(cand_rows).sort_values(["eligible", "test_score_avg", "test_score_med"], ascending=[False, False, False])
-            with st.expander(f"{sym} best-overall candidates", expanded=False):
-                st.dataframe(cand_df, use_container_width=True, height=260)
+            cand_df = pd.DataFrame(cand_rows).sort_values(["eligible", "global_test_score_avg", "global_test_score_med"], ascending=[False, False, False])
+            with st.expander("GLOBAL best-overall candidates", expanded=True):
+                st.dataframe(cand_df, use_container_width=True, height=280)
+                st.caption(f"Symbols used: {', '.join(sym_data.keys())}")
                 if best_dbg:
                     st.caption(
-                        f"Selected: restart {best_dbg['restart']} (seed {best_dbg['seed']}) | "
-                        f"test score avg {best_dbg['score_avg']:.3f} | median {best_dbg['score_med']:.3f} | "
+                        f"Selected GLOBAL: restart {best_dbg['restart']} (seed {best_dbg['seed']}) | "
+                        f"score avg {best_dbg['score_avg']:.3f} | median {best_dbg['score_med']:.3f} | "
                         f"worst DD {best_dbg['dd_worst_pct']:.2f}% | avg trades {best_dbg['trades_avg']:.1f}"
                     )
                 else:
-                    st.warning(
-                        "No eligible candidates found under the current constraints. "
-                        "Consider lowering 'Min avg test trades' or increasing 'Max test DD cap'."
-                    )
+                    st.warning("No eligible GLOBAL candidate found under current constraints; falling back to best by score.")
 
-            # If none eligible: fall back to the best by score_avg (even if ineligible) so you still get profiles.json
             if best_profiles is None and not cand_df.empty:
-                best_row = cand_df.iloc[0]
-                fallback_seed = int(best_row["seed"])
-                best_profiles, best_train = staged_optimize_regime_profiles(
-                    sym=sym,
+                best_profiles = None
+                best_profiles_seed = int(cand_df.iloc[0]["seed"])
+                best_profiles, _ = staged_optimize_regime_profiles(
+                    sym=primary,
                     df=train_df,
                     base_cfg=base_cfg,
                     base_profiles=base_profiles,
@@ -640,83 +422,301 @@ else:
                     trade_penalty=float(trade_penalty),
                     search=search,
                     max_evals_per_regime=int(max_evals_per_regime),
-                    seed=int(fallback_seed),
+                    seed=int(best_profiles_seed),
                     progress_cb=None,
                 )
 
-            profiles = best_profiles
-            best_train = best_train if best_train is not None else {}
-            # Evaluate across folds
+            # Apply same profiles to all symbols
+            for sym2 in sym_data.keys():
+                trained[sym2] = {
+                    "use_regime_profiles": True,
+                    "regime_profile_rebuild": False,
+                    "regime_profiles": best_profiles,
+                }
 
-            # Evaluate across folds
-            test_scores = []
-            test_pnls = []
-            test_dds = []
-
-            for fidx, (tr_s, tr_e, te_s, te_e, tr_df, te_df) in enumerate(folds_data):
-                dfs = {sym: te_df}
-                pair_cfg = {sym: dict(base_cfg)}
-                trades_df, equity_curve, decision_log, trader = run_backtest(
-                    dfs=dfs,
-                    pair_cfg=pair_cfg,
-                    timeframe=timeframe,
-                    start_cash=float(start_cash),
-                    maker_fee=float(maker_fee),
-                    taker_fee=float(taker_fee),
-                    slippage=float(slippage),
-                    fee_mode=str(fee_mode),
-                    quote_ccy="EUR",
-                    max_exposure_quote={},
-                    regime_profiles=profiles,
-                    enable_regime_profiles=True,
-                    confirm_n=int(confirm_n),
-                    cooldown_candles=int(cooldown_candles),
-                    rebuild_on_regime_change=False,
-                )
-                test_summ = summarize_run(equity_curve, trades_df)
-
-                tpnl = float(test_summ.get("total_pnl", 0.0))
-                tdd = float(test_summ.get("max_drawdown", 0.0))
-                tscore = _risk_score(tpnl, tdd)
-
-                test_scores.append(tscore)
-                test_pnls.append(tpnl)
-                test_dds.append(tdd)
-
-                fold_rows.append({
-                    "symbol": sym,
-                    "fold": fidx + 1,
-                    "train_start": str(tr_s),
-                    "train_end": str(tr_e),
-                    "test_start": str(te_s),
-                    "test_end": str(te_e),
-                    "test_total_pnl": tpnl,
-                    "test_max_dd_pct": tdd * 100.0,
-                    "test_score": tscore,
-                    "test_trades": _get_num_trades(test_summ),
-                    "test_win_rate_pct": float(test_summ.get("win_rate", 0.0)) * 100.0 if test_summ.get("win_rate") == test_summ.get("win_rate") else float("nan"),
-                })
-
-            trained[sym] = {
-                "use_regime_profiles": True,
-                "regime_profile_rebuild": False,
-                "regime_profiles": profiles,
-            }
-
-            # Aggregate report
+            score_avg, score_med, pnl_avg, dd_worst, dd_avg, trades_avg = _eval_profiles_global(best_profiles)
             report_rows.append({
-                "symbol": sym,
+                "symbol": "GLOBAL",
                 "status": "OK",
-                "train_total_pnl": float(best_train.get("total_pnl", 0.0)),
-                "train_max_dd_pct": float(best_train.get("max_drawdown", 0.0)) * 100.0,
-                "train_win_rate_pct": float(best_train.get("win_rate", 0.0)) * 100.0 if best_train.get("win_rate") == best_train.get("win_rate") else float("nan"),
-                "train_trades": _get_num_trades(best_train),
-                "test_score_avg": float(pd.Series(test_scores).mean()),
-                "test_score_med": float(pd.Series(test_scores).median()),
-                "test_total_pnl_avg": float(pd.Series(test_pnls).mean()),
-                "test_max_dd_pct_avg": float(pd.Series(test_dds).mean()) * 100.0,
-                "folds_used": len(test_scores),
+                "primary_symbol": primary,
+                "symbols_used": ", ".join(sym_data.keys()),
+                "test_score_avg": score_avg,
+                "test_score_med": score_med,
+                "test_total_pnl_avg": pnl_avg,
+                "test_max_dd_worst_pct": dd_worst * 100.0,
+                "test_max_dd_avg_pct": dd_avg * 100.0,
+                "test_trades_avg": trades_avg,
+                "folds_used_total": sum(len(v["folds"]) for v in sym_data.values()),
             })
+
+            with st.expander("GLOBAL fold debug per symbol", expanded=False):
+                st.json(sym_dbg)
+
+    else:
+        for i, sym in enumerate(symbols):
+                prog.progress(i / max(1, len(symbols)), text=f"Loading data for {sym}...")
+                since = pd.Timestamp.utcnow() - pd.Timedelta(days=int(lookback_days))
+                df = load_or_fetch(sym, timeframe=timeframe, since=since, until=None, force_refresh=force_refresh)
+                if df is None or df.empty:
+                    report_rows.append({"symbol": sym, "status": "NO_DATA"})
+                    continue
+
+                folds_data, folds_dbg = _rolling_folds(df)
+                if not folds_data:
+                    # Fallback: percent split 70/30 so we still produce a result if possible
+                    n = len(df)
+                    if n >= 100:
+                        n_test = max(20, int(round(n * 0.30)))
+                        train_df = df.iloc[: max(50, n - n_test)].copy()
+                        test_df = df.iloc[max(50, n - n_test):].copy()
+                        folds_data = [(
+                            train_df["timestamp"].min(), train_df["timestamp"].max(),
+                            test_df["timestamp"].min(), test_df["timestamp"].max(),
+                            train_df, test_df
+                        )]
+                        folds_dbg = {"reason": "FALLBACK_PERCENT_SPLIT", **(folds_dbg or {})}
+                    else:
+                        report_rows.append({"symbol": sym, "status": "NO_FOLDS", **(folds_dbg or {})})
+                        continue
+
+                # Optional debug panel
+                with st.expander(f"{sym} fold debug", expanded=False):
+                    st.json(folds_dbg)
+
+                # Optimize on the most recent fold's train set (fast), evaluate across all folds
+                train_start, train_end, test_start, test_end, train_df, _ = folds_data[-1]
+
+                prog.progress((i + 0.2) / max(1, len(symbols)), text=f"Optimize train profiles for {sym} (latest fold)...")
+                status_ph = st.empty()
+
+                def progress_cb(regime: str, done: int, total: int):
+                    status_ph.info(f"{sym} | optimizing {regime}: {done}/{total} evals")
+                # --- Best-overall selection: try multiple restarts (different seeds),
+                # pick the profile-set that maximizes average test score over folds, with stability filters.
+                cand_rows = []
+                best_profiles = None
+                best_train = None
+                best_test_score = None
+                best_test_score_med = None
+                best_dbg = None
+
+                def _eval_profiles_on_folds(profiles_i):
+                    test_scores = []
+                    test_pnls = []
+                    test_dds = []
+                    test_trades = []
+                    for fidx, (tr_s, tr_e, te_s, te_e, tr_df2, te_df) in enumerate(folds_data):
+                        dfs = {sym: te_df}
+                        pair_cfg = {sym: dict(base_cfg)}
+                        trades_df, equity_curve, decision_log, trader = run_backtest(
+                            dfs=dfs,
+                            pair_cfg=pair_cfg,
+                            timeframe=timeframe,
+                            start_cash=float(start_cash),
+                            maker_fee=float(maker_fee),
+                            taker_fee=float(taker_fee),
+                            slippage=float(slippage),
+                            fee_mode=str(fee_mode),
+                            quote_ccy="EUR",
+                            max_exposure_quote={},
+                            regime_profiles=profiles_i,
+                            enable_regime_profiles=True,
+                            confirm_n=int(confirm_n),
+                            cooldown_candles=int(cooldown_candles),
+                            rebuild_on_regime_change=False,
+                        )
+                        test_summ = summarize_run(equity_curve, trades_df)
+                        tpnl = float(test_summ.get("total_pnl", 0.0))
+                        tdd = float(test_summ.get("max_drawdown", 0.0))
+                        tscore = _risk_score(tpnl, tdd)
+                        test_scores.append(tscore)
+                        test_pnls.append(tpnl)
+                        test_dds.append(tdd)
+                        test_trades.append(_get_num_trades(test_summ))
+                    score_avg = float(pd.Series(test_scores).mean()) if test_scores else float("nan")
+                    score_med = float(pd.Series(test_scores).median()) if test_scores else float("nan")
+                    pnl_avg = float(pd.Series(test_pnls).mean()) if test_pnls else 0.0
+                    dd_worst = float(pd.Series(test_dds).max()) if test_dds else 1.0
+                    dd_avg = float(pd.Series(test_dds).mean()) if test_dds else 1.0
+                    trades_avg = float(pd.Series(test_trades).mean()) if test_trades else 0.0
+                    return score_avg, score_med, pnl_avg, dd_worst, dd_avg, trades_avg
+
+                for r in range(int(restarts)):
+                    seed_i = int(rng_seed) + 1000 * r
+
+                    # Train on latest fold's train set (fast), sampled within each regime
+                    profiles_i, best_train_i = staged_optimize_regime_profiles(
+                        sym=sym,
+                        df=train_df,
+                        base_cfg=base_cfg,
+                        base_profiles=base_profiles,
+                        timeframe=timeframe,
+                        start_cash=float(start_cash),
+                        maker_fee=float(maker_fee),
+                        taker_fee=float(taker_fee),
+                        slippage=float(slippage),
+                        fee_mode=fee_mode,
+                        quote_ccy="EUR",
+                        caps={},
+                        confirm_n=int(confirm_n),
+                        cooldown_candles=int(cooldown_candles),
+                        dd_penalty=float(dd_penalty),
+                        trade_penalty=float(trade_penalty),
+                        search=search,
+                        max_evals_per_regime=int(max_evals_per_regime),
+                        seed=int(seed_i),
+                        progress_cb=None,
+                    )
+
+                    score_avg, score_med, pnl_avg, dd_worst, dd_avg, trades_avg = _eval_profiles_on_folds(profiles_i)
+                    eligible = (trades_avg >= float(min_test_trades_avg)) and ((dd_worst * 100.0) <= float(max_test_dd_cap_pct))
+
+                    cand_rows.append({
+                        "restart": r + 1,
+                        "seed": seed_i,
+                        "eligible": bool(eligible),
+                        "test_score_avg": score_avg,
+                        "test_score_med": score_med,
+                        "test_pnl_avg": pnl_avg,
+                        "test_dd_worst_pct": dd_worst * 100.0,
+                        "test_dd_avg_pct": dd_avg * 100.0,
+                        "test_trades_avg": trades_avg,
+                        "train_total_pnl": float(best_train_i.get("total_pnl", 0.0)),
+                        "train_max_dd_pct": float(best_train_i.get("max_drawdown", 0.0)) * 100.0,
+                        "train_trades": _get_num_trades(best_train_i),
+                    })
+
+                    # Select best eligible
+                    if eligible:
+                        better = False
+                        if best_test_score is None or score_avg > best_test_score:
+                            better = True
+                        elif best_test_score is not None and score_avg == best_test_score and use_median_tiebreak:
+                            if best_test_score_med is None or score_med > best_test_score_med:
+                                better = True
+
+                        if better:
+                            best_profiles = profiles_i
+                            best_train = best_train_i
+                            best_test_score = score_avg
+                            best_test_score_med = score_med
+                            best_dbg = {"seed": seed_i, "restart": r + 1, "score_avg": score_avg, "score_med": score_med, "dd_worst_pct": dd_worst*100.0, "trades_avg": trades_avg}
+
+                cand_df = pd.DataFrame(cand_rows).sort_values(["eligible", "test_score_avg", "test_score_med"], ascending=[False, False, False])
+                with st.expander(f"{sym} best-overall candidates", expanded=False):
+                    st.dataframe(cand_df, use_container_width=True, height=260)
+                    if best_dbg:
+                        st.caption(
+                            f"Selected: restart {best_dbg['restart']} (seed {best_dbg['seed']}) | "
+                            f"test score avg {best_dbg['score_avg']:.3f} | median {best_dbg['score_med']:.3f} | "
+                            f"worst DD {best_dbg['dd_worst_pct']:.2f}% | avg trades {best_dbg['trades_avg']:.1f}"
+                        )
+                    else:
+                        st.warning(
+                            "No eligible candidates found under the current constraints. "
+                            "Consider lowering 'Min avg test trades' or increasing 'Max test DD cap'."
+                        )
+
+                # If none eligible: fall back to the best by score_avg (even if ineligible) so you still get profiles.json
+                if best_profiles is None and not cand_df.empty:
+                    best_row = cand_df.iloc[0]
+                    fallback_seed = int(best_row["seed"])
+                    best_profiles, best_train = staged_optimize_regime_profiles(
+                        sym=sym,
+                        df=train_df,
+                        base_cfg=base_cfg,
+                        base_profiles=base_profiles,
+                        timeframe=timeframe,
+                        start_cash=float(start_cash),
+                        maker_fee=float(maker_fee),
+                        taker_fee=float(taker_fee),
+                        slippage=float(slippage),
+                        fee_mode=fee_mode,
+                        quote_ccy="EUR",
+                        caps={},
+                        confirm_n=int(confirm_n),
+                        cooldown_candles=int(cooldown_candles),
+                        dd_penalty=float(dd_penalty),
+                        trade_penalty=float(trade_penalty),
+                        search=search,
+                        max_evals_per_regime=int(max_evals_per_regime),
+                        seed=int(fallback_seed),
+                        progress_cb=None,
+                    )
+
+                profiles = best_profiles
+                best_train = best_train if best_train is not None else {}
+                # Evaluate across folds
+
+                # Evaluate across folds
+                test_scores = []
+                test_pnls = []
+                test_dds = []
+
+                for fidx, (tr_s, tr_e, te_s, te_e, tr_df, te_df) in enumerate(folds_data):
+                    dfs = {sym: te_df}
+                    pair_cfg = {sym: dict(base_cfg)}
+                    trades_df, equity_curve, decision_log, trader = run_backtest(
+                        dfs=dfs,
+                        pair_cfg=pair_cfg,
+                        timeframe=timeframe,
+                        start_cash=float(start_cash),
+                        maker_fee=float(maker_fee),
+                        taker_fee=float(taker_fee),
+                        slippage=float(slippage),
+                        fee_mode=str(fee_mode),
+                        quote_ccy="EUR",
+                        max_exposure_quote={},
+                        regime_profiles=profiles,
+                        enable_regime_profiles=True,
+                        confirm_n=int(confirm_n),
+                        cooldown_candles=int(cooldown_candles),
+                        rebuild_on_regime_change=False,
+                    )
+                    test_summ = summarize_run(equity_curve, trades_df)
+
+                    tpnl = float(test_summ.get("total_pnl", 0.0))
+                    tdd = float(test_summ.get("max_drawdown", 0.0))
+                    tscore = _risk_score(tpnl, tdd)
+
+                    test_scores.append(tscore)
+                    test_pnls.append(tpnl)
+                    test_dds.append(tdd)
+
+                    fold_rows.append({
+                        "symbol": sym,
+                        "fold": fidx + 1,
+                        "train_start": str(tr_s),
+                        "train_end": str(tr_e),
+                        "test_start": str(te_s),
+                        "test_end": str(te_e),
+                        "test_total_pnl": tpnl,
+                        "test_max_dd_pct": tdd * 100.0,
+                        "test_score": tscore,
+                        "test_trades": _get_num_trades(test_summ),
+                        "test_win_rate_pct": float(test_summ.get("win_rate", 0.0)) * 100.0 if test_summ.get("win_rate") == test_summ.get("win_rate") else float("nan"),
+                    })
+
+                trained[sym] = {
+                    "use_regime_profiles": True,
+                    "regime_profile_rebuild": False,
+                    "regime_profiles": profiles,
+                }
+
+                # Aggregate report
+                report_rows.append({
+                    "symbol": sym,
+                    "status": "OK",
+                    "train_total_pnl": float(best_train.get("total_pnl", 0.0)),
+                    "train_max_dd_pct": float(best_train.get("max_drawdown", 0.0)) * 100.0,
+                    "train_win_rate_pct": float(best_train.get("win_rate", 0.0)) * 100.0 if best_train.get("win_rate") == best_train.get("win_rate") else float("nan"),
+                    "train_trades": _get_num_trades(best_train),
+                    "test_score_avg": float(pd.Series(test_scores).mean()),
+                    "test_score_med": float(pd.Series(test_scores).median()),
+                    "test_total_pnl_avg": float(pd.Series(test_pnls).mean()),
+                    "test_max_dd_pct_avg": float(pd.Series(test_dds).mean()) * 100.0,
+                    "folds_used": len(test_scores),
+                })
 
     prog.progress(1.0, text="Done.")
     st.session_state.trained_profiles = trained
