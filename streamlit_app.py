@@ -315,6 +315,19 @@ if uploaded is not None:
                 st.sidebar.error(f"Import failed: {e}")
 
 # --- Apply trained profiles from Trainer page (same session)
+# --- Apply trained profiles from Trainer page (same session)
+if st.sidebar.button("Apply BEST profiles from Trainer", width="stretch"):
+    trained_best = st.session_state.get("trained_profiles_best")
+    trained = trained_best if isinstance(trained_best, dict) and trained_best else st.session_state.get("trained_profiles")
+    if isinstance(trained, dict) and trained:
+        st.session_state.setdefault("pair_cfg", {})
+        for sym, blob in trained.items():
+            sym_u = str(sym).upper()
+            st.session_state.pair_cfg.setdefault(sym_u, {}).update(blob)
+        st.sidebar.success("Applied BEST trained profiles.")
+    else:
+        st.sidebar.info("No trained profiles found in session. Run Trainer page first.")
+
 if st.sidebar.button("Apply optimized profiles from Trainer", width="stretch"):
     trained = st.session_state.get("trained_profiles")
     if isinstance(trained, dict) and trained:

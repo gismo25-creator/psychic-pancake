@@ -79,6 +79,37 @@ max_evals_per_regime = st.sidebar.slider(
 )
 rng_seed = st.sidebar.number_input("Random seed", min_value=0, value=1337, step=1)
 
+st.sidebar.subheader("Best-overall selection")
+restarts = st.sidebar.slider(
+    "Restarts (profile sets to try)",
+    min_value=1,
+    max_value=20,
+    value=6,
+    step=1,
+    help="We trainen meerdere (gesamplede) profielsets met verschillende seeds en kiezen de beste op gemiddelde test-score over folds.",
+)
+min_test_trades_avg = st.sidebar.slider(
+    "Min avg test trades (eligibility)",
+    min_value=0,
+    max_value=200,
+    value=10,
+    step=1,
+    help="Voorkomt dat een 'best' profiel wint door nauwelijks te traden.",
+)
+max_test_dd_cap_pct = st.sidebar.slider(
+    "Max test drawdown cap (%)",
+    min_value=0.5,
+    max_value=50.0,
+    value=15.0,
+    step=0.5,
+    help="Alleen profielsets waarvan de worst-case test drawdown onder deze cap blijft, zijn eligible.",
+)
+use_median_tiebreak = st.sidebar.checkbox(
+    "Use median test score as tiebreak",
+    value=True,
+)
+
+
 
 run = st.sidebar.button("▶ Train (multi-fold WF)", width="stretch")
 
@@ -86,6 +117,8 @@ if "trained_profiles" not in st.session_state:
     st.session_state.trained_profiles = None
 if "trainer_report" not in st.session_state:
     st.session_state.trainer_report = None
+if "trained_profiles_best" not in st.session_state:
+    st.session_state.trained_profiles_best = None
 if "trainer_fold_details" not in st.session_state:
     st.session_state.trainer_fold_details = None
 
@@ -241,29 +274,162 @@ if run:
 
         def progress_cb(regime: str, done: int, total: int):
             status_ph.info(f"{sym} | optimizing {regime}: {done}/{total} evals")
+        # --- Best-overall selection: try multiple restarts (different seeds),
+        # pick the profile-set that maximizes average test score over folds, with stability filters.
+        cand_rows = []
+        best_profiles = None
+        best_train = None
+        best_test_score = None
+        best_test_score_med = None
+        best_dbg = None
 
-        profiles, best_train = staged_optimize_regime_profiles(
-            sym=sym,
-            df=train_df,
-            base_cfg=base_cfg,
-            base_profiles=base_profiles,
-            timeframe=timeframe,
-            start_cash=float(start_cash),
-            maker_fee=float(maker_fee),
-            taker_fee=float(taker_fee),
-            slippage=float(slippage),
-            fee_mode=fee_mode,
-            quote_ccy="EUR",
-            caps={},
-            confirm_n=int(confirm_n),
-            cooldown_candles=int(cooldown_candles),
-            dd_penalty=float(dd_penalty),
-            trade_penalty=float(trade_penalty),
-            search=search,
-            max_evals_per_regime=int(max_evals_per_regime),
-            seed=int(rng_seed),
-            progress_cb=progress_cb,
-        )
+        def _eval_profiles_on_folds(profiles_i):
+            test_scores = []
+            test_pnls = []
+            test_dds = []
+            test_trades = []
+            for fidx, (tr_s, tr_e, te_s, te_e, tr_df2, te_df) in enumerate(folds_data):
+                dfs = {sym: te_df}
+                pair_cfg = {sym: dict(base_cfg)}
+                trades_df, equity_curve, decision_log, trader = run_backtest(
+                    dfs=dfs,
+                    pair_cfg=pair_cfg,
+                    timeframe=timeframe,
+                    start_cash=float(start_cash),
+                    maker_fee=float(maker_fee),
+                    taker_fee=float(taker_fee),
+                    slippage=float(slippage),
+                    fee_mode=str(fee_mode),
+                    quote_ccy="EUR",
+                    max_exposure_quote={},
+                    regime_profiles=profiles_i,
+                    enable_regime_profiles=True,
+                    confirm_n=int(confirm_n),
+                    cooldown_candles=int(cooldown_candles),
+                    rebuild_on_regime_change=False,
+                )
+                test_summ = summarize_run(equity_curve, trades_df)
+                tpnl = float(test_summ.get("total_pnl", 0.0))
+                tdd = float(test_summ.get("max_drawdown", 0.0))
+                tscore = _risk_score(tpnl, tdd)
+                test_scores.append(tscore)
+                test_pnls.append(tpnl)
+                test_dds.append(tdd)
+                test_trades.append(_get_num_trades(test_summ))
+            score_avg = float(pd.Series(test_scores).mean()) if test_scores else float("nan")
+            score_med = float(pd.Series(test_scores).median()) if test_scores else float("nan")
+            pnl_avg = float(pd.Series(test_pnls).mean()) if test_pnls else 0.0
+            dd_worst = float(pd.Series(test_dds).max()) if test_dds else 1.0
+            dd_avg = float(pd.Series(test_dds).mean()) if test_dds else 1.0
+            trades_avg = float(pd.Series(test_trades).mean()) if test_trades else 0.0
+            return score_avg, score_med, pnl_avg, dd_worst, dd_avg, trades_avg
+
+        for r in range(int(restarts)):
+            seed_i = int(rng_seed) + 1000 * r
+
+            # Train on latest fold's train set (fast), sampled within each regime
+            profiles_i, best_train_i = staged_optimize_regime_profiles(
+                sym=sym,
+                df=train_df,
+                base_cfg=base_cfg,
+                base_profiles=base_profiles,
+                timeframe=timeframe,
+                start_cash=float(start_cash),
+                maker_fee=float(maker_fee),
+                taker_fee=float(taker_fee),
+                slippage=float(slippage),
+                fee_mode=fee_mode,
+                quote_ccy="EUR",
+                caps={},
+                confirm_n=int(confirm_n),
+                cooldown_candles=int(cooldown_candles),
+                dd_penalty=float(dd_penalty),
+                trade_penalty=float(trade_penalty),
+                search=search,
+                max_evals_per_regime=int(max_evals_per_regime),
+                seed=int(seed_i),
+                progress_cb=None,
+            )
+
+            score_avg, score_med, pnl_avg, dd_worst, dd_avg, trades_avg = _eval_profiles_on_folds(profiles_i)
+            eligible = (trades_avg >= float(min_test_trades_avg)) and ((dd_worst * 100.0) <= float(max_test_dd_cap_pct))
+
+            cand_rows.append({
+                "restart": r + 1,
+                "seed": seed_i,
+                "eligible": bool(eligible),
+                "test_score_avg": score_avg,
+                "test_score_med": score_med,
+                "test_pnl_avg": pnl_avg,
+                "test_dd_worst_pct": dd_worst * 100.0,
+                "test_dd_avg_pct": dd_avg * 100.0,
+                "test_trades_avg": trades_avg,
+                "train_total_pnl": float(best_train_i.get("total_pnl", 0.0)),
+                "train_max_dd_pct": float(best_train_i.get("max_drawdown", 0.0)) * 100.0,
+                "train_trades": _get_num_trades(best_train_i),
+            })
+
+            # Select best eligible
+            if eligible:
+                better = False
+                if best_test_score is None or score_avg > best_test_score:
+                    better = True
+                elif best_test_score is not None and score_avg == best_test_score and use_median_tiebreak:
+                    if best_test_score_med is None or score_med > best_test_score_med:
+                        better = True
+
+                if better:
+                    best_profiles = profiles_i
+                    best_train = best_train_i
+                    best_test_score = score_avg
+                    best_test_score_med = score_med
+                    best_dbg = {"seed": seed_i, "restart": r + 1, "score_avg": score_avg, "score_med": score_med, "dd_worst_pct": dd_worst*100.0, "trades_avg": trades_avg}
+
+        cand_df = pd.DataFrame(cand_rows).sort_values(["eligible", "test_score_avg", "test_score_med"], ascending=[False, False, False])
+        with st.expander(f"{sym} best-overall candidates", expanded=False):
+            st.dataframe(cand_df, use_container_width=True, height=260)
+            if best_dbg:
+                st.caption(
+                    f"Selected: restart {best_dbg['restart']} (seed {best_dbg['seed']}) | "
+                    f"test score avg {best_dbg['score_avg']:.3f} | median {best_dbg['score_med']:.3f} | "
+                    f"worst DD {best_dbg['dd_worst_pct']:.2f}% | avg trades {best_dbg['trades_avg']:.1f}"
+                )
+            else:
+                st.warning(
+                    "No eligible candidates found under the current constraints. "
+                    "Consider lowering 'Min avg test trades' or increasing 'Max test DD cap'."
+                )
+
+        # If none eligible: fall back to the best by score_avg (even if ineligible) so you still get profiles.json
+        if best_profiles is None and not cand_df.empty:
+            best_row = cand_df.iloc[0]
+            fallback_seed = int(best_row["seed"])
+            best_profiles, best_train = staged_optimize_regime_profiles(
+                sym=sym,
+                df=train_df,
+                base_cfg=base_cfg,
+                base_profiles=base_profiles,
+                timeframe=timeframe,
+                start_cash=float(start_cash),
+                maker_fee=float(maker_fee),
+                taker_fee=float(taker_fee),
+                slippage=float(slippage),
+                fee_mode=fee_mode,
+                quote_ccy="EUR",
+                caps={},
+                confirm_n=int(confirm_n),
+                cooldown_candles=int(cooldown_candles),
+                dd_penalty=float(dd_penalty),
+                trade_penalty=float(trade_penalty),
+                search=search,
+                max_evals_per_regime=int(max_evals_per_regime),
+                seed=int(fallback_seed),
+                progress_cb=None,
+            )
+
+        profiles = best_profiles
+        best_train = best_train if best_train is not None else {}
+        # Evaluate across folds
 
         # Evaluate across folds
         test_scores = []
@@ -337,6 +503,7 @@ if run:
 
     prog.progress(1.0, text="Done.")
     st.session_state.trained_profiles = trained
+    st.session_state.trained_profiles_best = trained
     st.session_state.trainer_report = pd.DataFrame(report_rows)
     st.session_state.trainer_fold_details = pd.DataFrame(fold_rows)
     st.success("Training complete. Profiles stored in session (and downloadable below).")
