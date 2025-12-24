@@ -25,6 +25,28 @@ else:
     st.sidebar.caption("Active: (none)")
 
 
+# Load ACTIVE bundle (if present) and apply to current session
+ap_file = active_path(store_dir)
+if Path(ap_file).is_file():
+    if st.sidebar.button("Load ACTIVE into session", use_container_width=True):
+        active_bundle = load_bundle(ap_file)
+        ok_a, errs_a, warns_a = validate_bundle(active_bundle)
+        if warns_a:
+            st.sidebar.warning("\n".join(warns_a))
+        if not ok_a:
+            st.sidebar.error("ACTIVE bundle is invalid:\n" + "\n".join(errs_a))
+        else:
+            act_profiles = active_bundle.get("profiles", {})
+            st.session_state.setdefault("pair_cfg", {})
+            for sym, cfg in act_profiles.items():
+                sym_u = str(sym).upper()
+                st.session_state.pair_cfg.setdefault(sym_u, {}).update(cfg)
+            append_audit("applied_active_session", {"source": "active.json", "symbols": sorted(list(act_profiles.keys()))}, store_dir=store_dir)
+            st.sidebar.success("Loaded ACTIVE into session.")
+else:
+    st.sidebar.caption("No ACTIVE bundle yet.")
+
+
 st.sidebar.subheader("Stored bundles")
 files = list_bundles(store_dir)
 selected = None
@@ -74,6 +96,96 @@ if errors:
 profiles = bundle.get("profiles", {})
 st.subheader("Symbols in bundle")
 st.write(sorted(list(profiles.keys())))
+
+st.subheader("Compare Candidate vs ACTIVE")
+
+ap = active_path(store_dir)
+active_bundle = None
+if Path(ap).is_file():
+    try:
+        active_bundle = load_bundle(ap)
+    except Exception as e:
+        st.error(f"Could not load ACTIVE bundle: {e}")
+
+if active_bundle is None:
+    st.info("No ACTIVE bundle found yet (promote one after a sanity PASS).")
+else:
+    # High-level meta compare
+    cmeta = (bundle.get("meta", {}) or {})
+    ameta = (active_bundle.get("meta", {}) or {})
+    c1, c2 = st.columns(2)
+    with c1:
+        st.caption("Candidate meta")
+        st.json(cmeta)
+    with c2:
+        st.caption("ACTIVE meta")
+        st.json(ameta)
+
+    # Profile diff (candidate vs active)
+    cand_prof = bundle.get("profiles", {}) or {}
+    act_prof = active_bundle.get("profiles", {}) or {}
+    # Reuse diff_profiles by treating act_prof as "current"
+    diff_ca = diff_profiles(act_prof, cand_prof)
+    with st.expander("Profile diff (Candidate vs ACTIVE)", expanded=False):
+        st.json(diff_ca)
+
+    st.caption("Run sanity on both to compare quickly before promotion.")
+    min_trades_per_symbol = st.slider(
+        "Min trades per symbol (sanity gate)",
+        min_value=0, max_value=200, value=5, step=1,
+        help="No-trade guard + minimum activity gate for sanity checks.",
+    )
+    max_dd_gate_pct = st.slider(
+        "Max drawdown gate (%)",
+        min_value=0.5, max_value=50.0, value=15.0, step=0.5,
+        help="If a symbol exceeds this DD in the sanity run, it fails.",
+    )
+    require_all_symbols = st.checkbox(
+        "Require sanity PASS for all symbols",
+        value=True,
+        help="If enabled, any FAIL makes overall FAIL.",
+    )
+
+    def _summarize_sanity(rows):
+        # rows: list of dicts with keys: symbol, trades, max_dd_pct, status
+        if not rows:
+            return {"pass": False, "reason": "NO_RESULTS"}
+        failed = [r for r in rows if r.get("status") != "PASS"]
+        overall = (len(failed) == 0) if require_all_symbols else (len(failed) < len(rows))
+        return {"pass": bool(overall), "n": len(rows), "fails": len(failed)}
+
+    # Use the existing sanity runner on page if present; else do minimal evaluation based on last stored results.
+    if "run_sanity_backtest" in globals():
+        colA, colB = st.columns(2)
+        with colA:
+            if st.button("Run sanity: Candidate", use_container_width=True):
+                cand_rows = run_sanity_backtest(bundle, min_trades_per_symbol=min_trades_per_symbol, max_dd_gate_pct=max_dd_gate_pct)
+                st.session_state["sanity_rows_candidate"] = cand_rows
+                summ = _summarize_sanity(cand_rows)
+                st.session_state["sanity_pass_candidate"] = summ["pass"]
+                st.session_state["sanity_summary_candidate"] = summ
+        with colB:
+            if st.button("Run sanity: ACTIVE", use_container_width=True):
+                act_rows = run_sanity_backtest(active_bundle, min_trades_per_symbol=min_trades_per_symbol, max_dd_gate_pct=max_dd_gate_pct)
+                st.session_state["sanity_rows_active"] = act_rows
+                summ = _summarize_sanity(act_rows)
+                st.session_state["sanity_pass_active"] = summ["pass"]
+                st.session_state["sanity_summary_active"] = summ
+
+        cand_rows = st.session_state.get("sanity_rows_candidate", [])
+        act_rows = st.session_state.get("sanity_rows_active", [])
+        if cand_rows or act_rows:
+            st.markdown("**Sanity results (latest runs)**")
+            c1, c2 = st.columns(2)
+            with c1:
+                st.caption(f"Candidate: {'PASS' if st.session_state.get('sanity_pass_candidate') else 'FAIL'}")
+                st.dataframe(cand_rows, use_container_width=True, height=240) if cand_rows else st.caption("Not run yet.")
+            with c2:
+                st.caption(f"ACTIVE: {'PASS' if st.session_state.get('sanity_pass_active') else 'FAIL'}")
+                st.dataframe(act_rows, use_container_width=True, height=240) if act_rows else st.caption("Not run yet.")
+    else:
+        st.caption("Sanity runner function not found; use the Sanity Backtest section above.")
+
 
 st.subheader("Diff vs current session")
 cur_cfg = st.session_state.get("pair_cfg", {}) or {}
@@ -220,15 +332,19 @@ st.subheader("Promotion")
 st.caption("Workflow: Sanity PASS → Promote to ACTIVE → (optioneel) Rollback via history.")
 
 # Expect sanity results in session_state if the sanity test was run on this page.
-sanity_ok = bool(st.session_state.get("sanity_pass", False))
-sanity_summary = st.session_state.get("sanity_summary", {})
+sanity_ok = bool(st.session_state.get("sanity_pass_candidate", st.session_state.get("sanity_pass", False)))
+sanity_summary = st.session_state.get("sanity_summary_candidate", st.session_state.get("sanity_summary", {}))
 if sanity_summary:
     st.caption(f"Last sanity: {'PASS' if sanity_ok else 'FAIL'} | {sanity_summary}")
 else:
     st.info("Run the Sanity Backtest above to enable promotion.")
 
 note = st.text_input("Promotion note (optional)", value="")
-if st.button("Promote this bundle to ACTIVE", disabled=(not sanity_ok)):
+cand_rows = st.session_state.get('sanity_rows_candidate', [])
+no_trade = any((r.get('trades', 0) == 0) for r in cand_rows) if cand_rows else False
+if no_trade:
+    st.warning('Sanity gate: at least one symbol had 0 trades (no-trade guard). Promotion disabled.')
+if st.button("Promote this bundle to ACTIVE", disabled=(not sanity_ok or no_trade)):
     apath, _ = promote_to_active(bundle, store_dir=store_dir, note=note)
     st.success(f"Promoted to {apath}")
 

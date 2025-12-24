@@ -199,3 +199,104 @@ streamlit run streamlit_app.py
 
 **Doel van dit project:**
 Een robuuste, transparante en uitbreidbare grid trading basis die veilig getest kan worden vóór live deployment.
+
+Quickstart (eerste keer gebruiken)
+1) Start de app
+
+Start Streamlit zoals je gewend bent (lokaal of via Streamlit Cloud).
+
+Controleer dat de app laadt en dat je Live/Simulation en de Trainer en Profile Manager pagina’s ziet.
+
+2) Kies je markt/pairs en timeframe
+
+Ga naar de Live/Simulation pagina.
+
+Zet je gewenste pairs (bijv. BTC/EUR, ETH/EUR) en timeframe (bijv. 15m).
+
+Laat de overige instellingen voorlopig op default.
+
+3) Draai de Trainer om profielen te maken
+
+Ga naar Trainer.
+
+Kies:
+
+Timeframe (bijv. 15m)
+
+Lookback (genoeg dagen om folds te kunnen maken)
+
+Folds/test window/step (defaults zijn prima om te starten)
+
+Kies Per symbol (default) of zet Global best across symbols aan als je één profielset voor alle symbols wilt.
+
+Klik Run Trainer.
+
+Resultaat:
+
+De Trainer maakt profielen en toont je resultaten.
+
+Aan het einde wordt automatisch een bundle JSON opgeslagen in:
+
+data/profiles/…json
+
+Je krijgt ook een knop Download bundle JSON.
+
+4) Valideer en test de bundle (Profile Manager)
+
+Ga naar Profile Manager (Governance).
+
+Selecteer je nieuwste bundle uit Stored bundles (of upload je JSON).
+
+Check:
+
+Validation = YES
+
+Bekijk de Diff vs current session (wat verandert er).
+
+Run de Sanity Backtest:
+
+Doel: snelle smoke-test op recente data.
+
+Dit geeft per symbool PASS/FAIL + trades, PnL, drawdown.
+
+5) Promote naar ACTIVE (alleen na Sanity PASS)
+
+Als Sanity PASS is: klik Promote this bundle to ACTIVE.
+
+Dit zet de bundle als:
+
+data/profiles/active.json
+
+En bewaart de vorige active in:
+
+data/profiles/active_history/…
+
+6) Apply in je sessie (optioneel)
+
+Wil je direct met die settings door in de huidige Streamlit sessie:
+
+In Profile Manager: vink confirm aan → Apply bundle
+
+Dit overschrijft alleen instellingen in session_state.pair_cfg (het plaatst geen echte orders).
+
+7) Rollback als iets niet bevalt
+
+In Profile Manager → Rollback ACTIVE:
+
+Kies een bestand uit active_history
+
+Klik Rollback ACTIVE
+
+Alles wordt gelogd in Audit log (data/profiles/audit_log.jsonl).
+
+Praktische tips
+
+Krijg je “INSUFFICIENT_HISTORY”: verhoog Lookback of verlaag folds/windows.
+
+Voor een snelle iteratie: gebruik minder restarts en lagere max evals/regime.
+
+Als je meerdere pairs test: Global best is handig, maar per-symbol geeft vaak betere fit per markt.
+
+Als je wilt, kan ik dit ook als docs/GETTING_STARTED.md toevoegen in de volgende zip, zodat het netjes in je repo staat.
+
+
