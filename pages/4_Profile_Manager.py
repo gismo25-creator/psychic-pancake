@@ -328,6 +328,21 @@ if cache:
 # Gate apply: require sanity PASS by default
 st.session_state["sanity_pass_for_bundle"] = sanity_pass
 
+# Store canonical sanity artifacts for Promotion/Dry-run gates
+if cache and isinstance(cache.get("results"), list):
+    st.session_state["sanity_rows"] = cache.get("results", [])
+else:
+    st.session_state["sanity_rows"] = []
+st.session_state["sanity_summary"] = {
+    "bundle_id": bundle_id,
+    "require_no_errors": bool(require_no_errors),
+    "n_symbols": len(st.session_state["sanity_rows"]),
+    "fails": sum(1 for r in st.session_state["sanity_rows"] if r.get("status") == "FAIL"),
+    "errors": sum(1 for r in st.session_state["sanity_rows"] if r.get("status") == "ERROR"),
+}
+st.session_state["sanity_pass"] = bool(sanity_pass)
+
+
 # --- Normalize sanity results (legacy keys -> candidate keys)
 if "sanity_pass_candidate" not in st.session_state and "sanity_pass" in st.session_state:
     st.session_state["sanity_pass_candidate"] = bool(st.session_state.get("sanity_pass"))
@@ -340,15 +355,15 @@ st.subheader("Promotion")
 st.caption("Workflow: Sanity PASS → Promote to ACTIVE → (optioneel) Rollback via history.")
 
 # Expect sanity results in session_state if the sanity test was run on this page.
-sanity_ok = bool(st.session_state.get("sanity_pass_candidate", st.session_state.get("sanity_pass", False)))
-sanity_summary = st.session_state.get("sanity_summary_candidate", st.session_state.get("sanity_summary", {}))
+sanity_ok = bool(st.session_state.get("sanity_pass_for_bundle", st.session_state.get("sanity_pass_candidate", st.session_state.get("sanity_pass", False))))
+sanity_summary = st.session_state.get("sanity_summary", st.session_state.get("sanity_summary_candidate", st.session_state.get("sanity_summary", {})))
 if sanity_summary or sanity_ok:
     st.caption(f"Last sanity: {'PASS' if sanity_ok else 'FAIL'} | {sanity_summary}")
 else:
     st.info("Run the Sanity Backtest above to enable promotion.")
 
 note = st.text_input("Promotion note (optional)", value="")
-cand_rows = st.session_state.get('sanity_rows_candidate', [])
+cand_rows = st.session_state.get('sanity_rows', st.session_state.get('sanity_rows_candidate', []))
 no_trade = any((r.get('trades', 0) == 0) for r in cand_rows) if cand_rows else False
 if no_trade:
     st.warning('Sanity gate: at least one symbol had 0 trades (no-trade guard). Promotion disabled.')
