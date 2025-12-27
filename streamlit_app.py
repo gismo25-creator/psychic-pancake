@@ -56,6 +56,12 @@ FEE_TIERS_CAT_A = [
     ("€500M+",     0.0000, 0.0001),
 ]
 
+
+# --- Execution mode defaults (defined early so top buttons can reference them) ---
+exec_mode = st.session_state.get('exec_mode', 'Simulation (paper, candle close)')
+dryrun_allowed = bool(st.session_state.get('dryrun_allowed', True))
+active_bundle = st.session_state.get('active_bundle', None)
+
 st.set_page_config(layout="wide")
 st.title("Grid Trading Bot – Bitvavo (Simulation + Panic Button + Auto-Pause)")
 
@@ -140,7 +146,7 @@ st.sidebar.subheader("Execution mode")
 exec_mode = st.sidebar.selectbox(
     "Mode",
     ["Simulation (paper, candle close)", "Dry-run Live (paper, ticker mid)"],
-    index=0,
+    index=0, key="exec_mode",
     help="Dry-run Live uses Bitvavo ticker bid/ask (mid) for triggering and paper fills. No real orders are sent."
 )
 
@@ -176,6 +182,10 @@ if exec_mode.startswith("Dry-run"):
             if not allow_dryrun_without_active:
                 dryrun_allowed = False
                 st.sidebar.error(f"Dry-run Live gate: could not load/validate ACTIVE bundle: {e}")
+
+st.session_state['dryrun_allowed'] = bool(dryrun_allowed)
+st.session_state['active_bundle'] = active_bundle
+
 
 
 
