@@ -328,13 +328,21 @@ if cache:
 # Gate apply: require sanity PASS by default
 st.session_state["sanity_pass_for_bundle"] = sanity_pass
 
+# --- Normalize sanity results (legacy keys -> candidate keys)
+if "sanity_pass_candidate" not in st.session_state and "sanity_pass" in st.session_state:
+    st.session_state["sanity_pass_candidate"] = bool(st.session_state.get("sanity_pass"))
+if "sanity_rows_candidate" not in st.session_state and "sanity_rows" in st.session_state:
+    st.session_state["sanity_rows_candidate"] = st.session_state.get("sanity_rows", [])
+if "sanity_summary_candidate" not in st.session_state and "sanity_summary" in st.session_state:
+    st.session_state["sanity_summary_candidate"] = st.session_state.get("sanity_summary", {})
+
 st.subheader("Promotion")
 st.caption("Workflow: Sanity PASS → Promote to ACTIVE → (optioneel) Rollback via history.")
 
 # Expect sanity results in session_state if the sanity test was run on this page.
 sanity_ok = bool(st.session_state.get("sanity_pass_candidate", st.session_state.get("sanity_pass", False)))
 sanity_summary = st.session_state.get("sanity_summary_candidate", st.session_state.get("sanity_summary", {}))
-if sanity_summary:
+if sanity_summary or sanity_ok:
     st.caption(f"Last sanity: {'PASS' if sanity_ok else 'FAIL'} | {sanity_summary}")
 else:
     st.info("Run the Sanity Backtest above to enable promotion.")
