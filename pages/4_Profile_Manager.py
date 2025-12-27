@@ -353,6 +353,11 @@ no_trade = any((r.get('trades', 0) == 0) for r in cand_rows) if cand_rows else F
 if no_trade:
     st.warning('Sanity gate: at least one symbol had 0 trades (no-trade guard). Promotion disabled.')
 if st.button("Promote this bundle to ACTIVE", disabled=(not sanity_ok or no_trade)):
+        # Stamp meta so Live/Dry-run can enforce safety gates
+    bundle.setdefault('meta', {})
+    bundle['meta']['sanity_passed'] = True
+    bundle['meta']['sanity_summary'] = st.session_state.get('sanity_summary_candidate', st.session_state.get('sanity_summary', {}))
+    bundle['meta']['sanity_rows'] = st.session_state.get('sanity_rows_candidate', st.session_state.get('sanity_rows', []))
     apath, _ = promote_to_active(bundle, store_dir=store_dir, note=note)
     st.success(f"Promoted to {apath}")
 

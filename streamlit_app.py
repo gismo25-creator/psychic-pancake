@@ -1,3 +1,4 @@
+from pathlib import Path
 import math
 import time
 import json
@@ -10,7 +11,7 @@ import streamlit as st
 import plotly.graph_objects as go
 from streamlit_autorefresh import st_autorefresh
 
-from core.market_data import fetch_ohlcv_bitvavo
+from core.market_data import fetch_ohlcv_bitvavo, fetch_ticker_bitvavo
 from core.grid.linear import generate_linear_grid
 from core.grid.fibonacci import generate_fibonacci_grid
 from core.grid.engine import GridEngine
@@ -18,6 +19,8 @@ from core.exchange.simulator import PortfolioSimulatorTrader
 
 from core.ml.volatility import atr, realized_vol, bollinger_bandwidth, adx, vol_cluster_acf1
 from core.ml.regime import classify_regime
+
+from core.profiles.registry import active_path, load_bundle, validate_bundle
 
 
 # ----------------------------
@@ -60,7 +63,7 @@ st.title("Grid Trading Bot – Bitvavo (Simulation + Panic Button + Auto-Pause)"
 c1, c2, c3, c4, c5 = st.columns(5)
 
 with c1:
-    if st.button("▶ START", width="stretch"):
+    if st.button("▶ START", width="stretch", disabled=(exec_mode.startswith("Dry-run") and (not dryrun_allowed))):
         # Require confirmation to resume
         st.session_state.start_pending = True
         st.session_state.start_pending_ts = time.time()
@@ -108,7 +111,7 @@ if st.session_state.start_pending:
         with warn_col:
             st.warning("Bevestig START (binnen 15s) om trading te hervatten.")
         with btn_col:
-            if st.button("✅ CONFIRM RESUME", width="stretch"):
+            if st.button("✅ CONFIRM RESUME", width="stretch", disabled=(exec_mode.startswith("Dry-run") and (not dryrun_allowed))):
                 # Only allow resume if portfolio stop not active.
                 if st.session_state.get("portfolio_stop_active", False):
                     st.error("Portfolio stop is ACTIVE. Reset session om opnieuw te starten.")
@@ -116,7 +119,7 @@ if st.session_state.start_pending:
                     st.session_state.trading_enabled = True
                 st.session_state.start_pending = False
 
-st.caption(f"Trading status: {'RUNNING' if st.session_state.trading_enabled else 'STOPPED'}")
+st.caption(f"Trading status: {'RUNNING' if st.session_state.trading_enabled else 'STOPPED'} | Mode: {exec_mode}")
 
 
 # ----------------------------
@@ -132,6 +135,49 @@ timeframe = st.sidebar.selectbox("Timeframe", ["1m", "5m", "15m"], index=1)
 
 refresh = st.sidebar.slider("Refresh sec", 5, 60, 15)
 st_autorefresh(interval=refresh * 1000, key="refresh")
+# --- Execution mode (no real orders are ever sent from this app unless live executor is added)
+st.sidebar.subheader("Execution mode")
+exec_mode = st.sidebar.selectbox(
+    "Mode",
+    ["Simulation (paper, candle close)", "Dry-run Live (paper, ticker mid)"],
+    index=0,
+    help="Dry-run Live uses Bitvavo ticker bid/ask (mid) for triggering and paper fills. No real orders are sent."
+)
+
+# Safety gates for Dry-run Live
+allow_dryrun_without_active = st.sidebar.checkbox(
+    "Allow Dry-run without ACTIVE bundle (not recommended)",
+    value=False,
+    help="If disabled (default), Dry-run Live requires an ACTIVE bundle promoted via Profile Manager with sanity_passed=True."
+)
+
+dryrun_allowed = True
+active_bundle = None
+if exec_mode.startswith("Dry-run"):
+    ap = active_path()
+    if (not allow_dryrun_without_active) and (not Path(ap).is_file()):
+        dryrun_allowed = False
+        st.sidebar.error("Dry-run Live gate: no ACTIVE bundle found. Promote a sanity-passed bundle to ACTIVE in Profile Manager.")
+    elif Path(ap).is_file():
+        try:
+            active_bundle = load_bundle(ap)
+            ok, errs, warns = validate_bundle(active_bundle)
+            if warns:
+                st.sidebar.warning("\n".join(warns))
+            if (not ok) and (not allow_dryrun_without_active):
+                dryrun_allowed = False
+                st.sidebar.error("Dry-run Live gate: ACTIVE bundle invalid. Fix/replace it in Profile Manager.")
+            else:
+                meta = active_bundle.get("meta", {}) or {}
+                if (not bool(meta.get("sanity_passed", False))) and (not allow_dryrun_without_active):
+                    dryrun_allowed = False
+                    st.sidebar.error("Dry-run Live gate: ACTIVE bundle not marked sanity_passed. Re-promote after a PASS sanity test.")
+        except Exception as e:
+            if not allow_dryrun_without_active:
+                dryrun_allowed = False
+                st.sidebar.error(f"Dry-run Live gate: could not load/validate ACTIVE bundle: {e}")
+
+
 
 
 # ----------------------------
@@ -591,6 +637,16 @@ for sym in symbols:
         continue
     dfs[sym] = df
     last_prices[sym] = float(df["close"].iloc[-1])
+    if exec_mode.startswith("Dry-run"):
+        try:
+            t = fetch_ticker_bitvavo(sym)
+            bid = t.get("bid"); ask = t.get("ask"); last = t.get("last")
+            if (bid is not None) and (ask is not None):
+                last_prices[sym] = float((bid + ask) / 2.0)
+            elif last is not None:
+                last_prices[sym] = float(last)
+        except Exception:
+            pass
     last_ts_map[sym] = df["timestamp"].iloc[-1]
 
 

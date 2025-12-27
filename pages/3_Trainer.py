@@ -32,7 +32,7 @@ st.info(
 st.sidebar.subheader("Data")
 symbols = st.sidebar.multiselect(
     "Symbols",
-    ["BTC/EUR", "ETH/EUR", "SOL/EUR", "XRP/EUR", "ICNT/EUR"],
+    ["BTC/EUR", "ETH/EUR", "SOL/EUR", "XRP/EUR", "ADA/EUR"],
     default=["BTC/EUR"],
 )
 timeframe = st.sidebar.selectbox("Timeframe", ["1m", "5m", "15m"], index=1)
