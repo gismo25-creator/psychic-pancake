@@ -121,6 +121,27 @@ max_test_dd_cap_pct = st.sidebar.slider(
     step=0.5,
     help="Alleen profielsets waarvan de worst-case test drawdown onder deze cap blijft, zijn eligible.",
 )
+
+# Additional promotion-quality gates (recommended)
+require_positive_test_pnl = st.sidebar.checkbox(
+    "Gate: require test PnL avg > 0",
+    value=True,
+    help="Reject profile sets that are net negative out-of-sample (after fees/slippage)."
+)
+min_worst_fold_test_pnl = st.sidebar.number_input(
+    "Gate: worst fold test PnL (>=)",
+    value=0.0,
+    step=0.1,
+    help="Reject if any fold has test PnL below this threshold."
+)
+min_test_trades_per_fold = st.sidebar.slider(
+    "Gate: min test trades per fold",
+    min_value=0,
+    max_value=500,
+    value=20,
+    step=5,
+    help="Reject if any test fold has fewer trades than this threshold."
+)
 use_median_tiebreak = st.sidebar.checkbox(
     "Use median test score as tiebreak",
     value=True,
@@ -759,6 +780,64 @@ if run:
         "git_commit": ((_git_commit() if "_git_commit" in globals() else "") if "_git_commit" in globals() else ""),
         "data_hashes": data_hashes,
     }
+
+    # --- Evaluate gates for this bundle (used by Profile Manager promotion)
+    gates = {
+        "require_positive_test_pnl": bool(require_positive_test_pnl),
+        "min_worst_fold_test_pnl": float(min_worst_fold_test_pnl),
+        "min_test_trades_per_fold": int(min_test_trades_per_fold),
+        "min_test_trades_avg": int(min_test_trades_avg),
+        "max_test_dd_cap_pct": float(max_test_dd_cap_pct),
+    }
+    gate_fail = []
+
+    # High-level gates from trainer_report
+    try:
+        rep = st.session_state.trainer_report
+        if rep is not None and not rep.empty:
+            if "symbol" in rep.columns and (rep["symbol"] == "GLOBAL").any():
+                row = rep[rep["symbol"] == "GLOBAL"].iloc[0]
+                test_pnl_avg = float(row.get("test_total_pnl_avg", row.get("global_test_pnl_avg", 0.0)))
+                test_dd_worst = float(row.get("test_max_dd_worst_pct", row.get("global_test_dd_worst_pct", 0.0)))
+                test_trades_avg_val = float(row.get("test_trades_avg", row.get("global_test_trades_avg", 0.0)))
+            else:
+                test_pnl_avg = float(rep["test_total_pnl_avg"].sum()) if "test_total_pnl_avg" in rep.columns else float(rep.get("test_pnl_avg", 0.0).sum()) if "test_pnl_avg" in rep.columns else 0.0
+                test_dd_worst = float(rep["test_max_dd_worst_pct"].max()) if "test_max_dd_worst_pct" in rep.columns else float(rep.get("test_dd_worst_pct", 0.0).max()) if "test_dd_worst_pct" in rep.columns else 0.0
+                test_trades_avg_val = float(rep["test_trades_avg"].mean()) if "test_trades_avg" in rep.columns else 0.0
+
+            if gates["require_positive_test_pnl"] and (test_pnl_avg <= 0.0):
+                gate_fail.append("NEG_TEST_PNL_AVG")
+            if test_trades_avg_val < gates["min_test_trades_avg"]:
+                gate_fail.append("MIN_TRADES_AVG")
+
+            dd_pct = (test_dd_worst * 100.0) if (0.0 <= test_dd_worst <= 1.0) else test_dd_worst
+            if dd_pct > gates["max_test_dd_cap_pct"]:
+                gate_fail.append("DD_CAP")
+    except Exception:
+        pass
+
+    # Fold-level gates from fold_rows
+    try:
+        worst_fold_pnl = None
+        min_fold_trades = None
+        for r in fold_rows:
+            pnl = r.get("test_total_pnl", r.get("test_pnl", r.get("pnl_test", None)))
+            trades = r.get("test_trades", r.get("trades", r.get("n_test_trades", None)))
+            if pnl is not None:
+                worst_fold_pnl = float(pnl) if worst_fold_pnl is None else min(worst_fold_pnl, float(pnl))
+            if trades is not None:
+                min_fold_trades = int(trades) if min_fold_trades is None else min(min_fold_trades, int(trades))
+
+        if worst_fold_pnl is not None and worst_fold_pnl < gates["min_worst_fold_test_pnl"]:
+            gate_fail.append("WORST_FOLD_PNL")
+        if min_fold_trades is not None and min_fold_trades < gates["min_test_trades_per_fold"]:
+            gate_fail.append("MIN_TRADES_PER_FOLD")
+    except Exception:
+        pass
+
+    meta["gates"] = gates
+    meta["gates_passed"] = (len(gate_fail) == 0)
+    meta["gates_failed"] = gate_fail
 
     bundle = make_bundle(trained, meta)
     default_name = f"bundle_{meta['mode'].lower()}_{timeframe}_{pd.Timestamp.utcnow().strftime('%Y%m%d_%H%M%S')}"

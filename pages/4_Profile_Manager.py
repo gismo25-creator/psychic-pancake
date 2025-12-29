@@ -352,6 +352,20 @@ if "sanity_summary_candidate" not in st.session_state and "sanity_summary" in st
     st.session_state["sanity_summary_candidate"] = st.session_state.get("sanity_summary", {})
 
 st.subheader("Promotion")
+
+# Bundle-level gates from Trainer
+bundle_gates_passed = True
+bundle_gates_failed = []
+try:
+    _meta = (bundle.get("meta", {}) or {})
+    if "gates_passed" in _meta:
+        bundle_gates_passed = bool(_meta.get("gates_passed", True))
+        bundle_gates_failed = list(_meta.get("gates_failed", [])) if _meta.get("gates_failed") is not None else []
+    if not bundle_gates_passed:
+        st.warning(f"Bundle gates failed: {', '.join(bundle_gates_failed) if bundle_gates_failed else 'UNKNOWN'}")
+except Exception:
+    pass
+
 st.caption("Workflow: Sanity PASS → Promote to ACTIVE → (optioneel) Rollback via history.")
 
 # Expect sanity results in session_state if the sanity test was run on this page.

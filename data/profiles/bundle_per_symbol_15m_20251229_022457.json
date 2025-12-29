@@ -1,0 +1,98 @@
+{
+  "schema_version": 1,
+  "created_at": "2025-12-29T02:24:57.452050+00:00",
+  "meta": {
+    "mode": "PER_SYMBOL",
+    "symbols": [
+      "ETH/EUR",
+      "SOL/EUR"
+    ],
+    "timeframe": "15m",
+    "lookback_days": 177,
+    "folds": 4,
+    "test_window_days": 14,
+    "step_days": 14,
+    "min_train_days": 71,
+    "max_evals_per_regime": 340,
+    "restarts": 6,
+    "rng_seed": 1337,
+    "fees": {
+      "maker": 0.001,
+      "taker": 0.0025,
+      "slippage": 0.0005,
+      "mode": "maker"
+    },
+    "git_commit": "",
+    "data_hashes": {}
+  },
+  "profiles": {
+    "ETH/EUR": {
+      "use_regime_profiles": true,
+      "regime_profile_rebuild": false,
+      "regime_profiles": {
+        "RANGE": {
+          "range_pct": 2.0,
+          "levels": 14,
+          "order_size_mult": 0.6,
+          "cycle_tp_enable": true,
+          "cycle_tp_pct": 0.2
+        },
+        "TREND": {
+          "range_pct": 0.8,
+          "levels": 14,
+          "order_size_mult": 0.6,
+          "cycle_tp_enable": true,
+          "cycle_tp_pct": 0.35
+        },
+        "CHAOS": {
+          "range_pct": 3.0,
+          "levels": 8,
+          "order_size_mult": 0.6,
+          "cycle_tp_enable": true,
+          "cycle_tp_pct": 0.5
+        },
+        "WARMUP": {
+          "range_pct": 2.0,
+          "levels": 10,
+          "order_size_mult": 1.2,
+          "cycle_tp_enable": true,
+          "cycle_tp_pct": 0.35
+        }
+      }
+    },
+    "SOL/EUR": {
+      "use_regime_profiles": true,
+      "regime_profile_rebuild": false,
+      "regime_profiles": {
+        "RANGE": {
+          "range_pct": 0.8,
+          "levels": 16,
+          "order_size_mult": 0.6,
+          "cycle_tp_enable": true,
+          "cycle_tp_pct": 0.5
+        },
+        "TREND": {
+          "range_pct": 0.8,
+          "levels": 16,
+          "order_size_mult": 0.6,
+          "cycle_tp_enable": true,
+          "cycle_tp_pct": 0.35
+        },
+        "CHAOS": {
+          "range_pct": 3.0,
+          "levels": 8,
+          "order_size_mult": 0.6,
+          "cycle_tp_enable": true,
+          "cycle_tp_pct": 0.5
+        },
+        "WARMUP": {
+          "range_pct": 1.6,
+          "levels": 14,
+          "order_size_mult": 1.2,
+          "cycle_tp_enable": true,
+          "cycle_tp_pct": 0.8
+        }
+      }
+    }
+  }
+}
