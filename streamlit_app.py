@@ -440,6 +440,13 @@ def default_cfg(sym: str):
         "order_size": 0.001,
         "enable_cycle_tp": False,
         "cycle_tp_pct": 0.35,
+        "enable_time_stop": True,
+        "time_stop_hours": 48.0,
+        "time_stop_mode": "DECAY_TO_TP",
+        "time_stop_floor_tp_pct": 0.20,
+        "trend_guard_enable": True,
+        "trend_guard_lookback": 30,
+        "trend_guard_thr_pct": 0.0,
         "auto_optimize": False,
         "opt_target_hit": 0.40,
         "opt_min_range_pct": 0.30,
@@ -543,6 +550,44 @@ for sym in symbols:
             f"{sym} Cycle TP (%)", 0.05, 5.0, float(cfg.get("cycle_tp_pct", 0.35)), step=0.05,
             disabled=(not bool(cfg.get("enable_cycle_tp", False))), key=f"{sym}_ctp_pct"
         )
+
+        st.markdown("**Inventory management (anti-hang)**")
+        cfg["enable_time_stop"] = st.checkbox(
+            f"{sym} Time-stop per cycle",
+            value=bool(cfg.get("enable_time_stop", True)),
+            help="Interpreteerbaar: als een cycle te lang open staat, mag hij sluiten op (net) break-even of met afbouwende TP.",
+            key=f"{sym}_ts_en"
+        )
+        cfg["time_stop_hours"] = st.slider(
+            f"{sym} Time-stop after (hours)", 1.0, 240.0, float(cfg.get("time_stop_hours", 48.0)), step=1.0,
+            disabled=(not bool(cfg.get("enable_time_stop", True))), key=f"{sym}_ts_h"
+        )
+        cfg["time_stop_mode"] = st.selectbox(
+            f"{sym} Time-stop mode", ["BREAK_EVEN_NET", "REDUCE_TO_TP", "DECAY_TO_TP"],
+            index=["BREAK_EVEN_NET","REDUCE_TO_TP","DECAY_TO_TP"].index(str(cfg.get("time_stop_mode","DECAY_TO_TP")).upper() if str(cfg.get("time_stop_mode","DECAY_TO_TP")).upper() in ["BREAK_EVEN_NET","REDUCE_TO_TP","DECAY_TO_TP"] else "DECAY_TO_TP"),
+            disabled=(not bool(cfg.get("enable_time_stop", True))), key=f"{sym}_ts_mode"
+        )
+        cfg["time_stop_floor_tp_pct"] = st.slider(
+            f"{sym} Time-stop TP floor (%)", 0.0, 3.0, float(cfg.get("time_stop_floor_tp_pct", 0.20)), step=0.05,
+            disabled=(not bool(cfg.get("enable_time_stop", True))) or str(cfg.get("time_stop_mode","")).upper()=="BREAK_EVEN_NET",
+            key=f"{sym}_ts_floor"
+        )
+
+        cfg["trend_guard_enable"] = st.checkbox(
+            f"{sym} Trend-guard (no buys in TREND-down)",
+            value=bool(cfg.get("trend_guard_enable", True)),
+            help="Interpreteerbaar: als regime TREND én de prijs over lookback daalt, blokkeer buys (sells blijven toegestaan).",
+            key=f"{sym}_tg_en"
+        )
+        cfg["trend_guard_lookback"] = st.slider(
+            f"{sym} Trend lookback (candles)", 5, 200, int(cfg.get("trend_guard_lookback", 30)), step=5,
+            disabled=(not bool(cfg.get("trend_guard_enable", True))), key=f"{sym}_tg_lb"
+        )
+        cfg["trend_guard_thr_pct"] = st.slider(
+            f"{sym} Downtrend threshold (%)", 0.0, 5.0, float(cfg.get("trend_guard_thr_pct", 0.0)), step=0.1,
+            disabled=(not bool(cfg.get("trend_guard_enable", True))), key=f"{sym}_tg_thr"
+        )
+
 
 
 st.markdown("---")
@@ -1210,8 +1255,26 @@ for sym, df in dfs.items():
     eng.enable_cycle_tp = bool(cfg.get("enable_cycle_tp", False))
     eng.cycle_tp_pct = float(cfg.get("cycle_tp_pct", 0.35))
 
+    eng.enable_time_stop = bool(cfg.get("enable_time_stop", True))
+    eng.time_stop_hours = float(cfg.get("time_stop_hours", 48.0))
+    eng.time_stop_mode = str(cfg.get("time_stop_mode", "DECAY_TO_TP")).upper()
+    eng.time_stop_floor_tp_pct = float(cfg.get("time_stop_floor_tp_pct", 0.20))
+
     base = sym.split("/")[0]
-    allow_buys = global_allow_buys and (base not in st.session_state.asset_halt)
+    trend_block = False
+    trend_ret_pct = float("nan")
+    if bool(cfg.get("trend_guard_enable", True)) and eff_regime == "TREND":
+        lb = int(cfg.get("trend_guard_lookback", 30))
+        thr = float(cfg.get("trend_guard_thr_pct", 0.0))
+        if lb >= 2 and len(df) >= lb + 1:
+            try:
+                trend_ret_pct = (float(df["close"].iloc[-1]) / float(df["close"].iloc[-lb-1]) - 1.0) * 100.0
+                if trend_ret_pct <= -thr:
+                    trend_block = True
+            except Exception:
+                trend_block = False
+
+    allow_buys = global_allow_buys and (base not in st.session_state.asset_halt) and (not trend_block)
 
     pair_is_paused = sym in st.session_state.pair_paused
 
@@ -1313,6 +1376,8 @@ for sym, df in dfs.items():
         "closed_pnl": sum(c["pnl"] for c in eng.closed_cycles),
         "trades": len(eng.trades),
         "halted": base in st.session_state.asset_halt,
+        "trend_blocked": bool(trend_block),
+        "trend_ret_pct": trend_ret_pct,
         "paused": pair_is_paused,
         "asset_dd_pct": float(asset_dd.get(base, 0.0)),
         "in_drawdown": base in assets_in_dd,

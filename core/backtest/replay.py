@@ -189,6 +189,11 @@ def run_backtest(
         eng.enable_cycle_tp = bool((profile or {}).get("cycle_tp_enable", cfg.get("cycle_tp_enable", False)))
         eng.cycle_tp_pct = float((profile or {}).get("cycle_tp_pct", cfg.get("cycle_tp_pct", 0.35)))
 
+        eng.enable_time_stop = bool((profile or {}).get("time_stop_enable", cfg.get("time_stop_enable", True)))
+        eng.time_stop_hours = float((profile or {}).get("time_stop_hours", cfg.get("time_stop_hours", 48.0)))
+        eng.time_stop_mode = str((profile or {}).get("time_stop_mode", cfg.get("time_stop_mode", "DECAY_TO_TP"))).upper()
+        eng.time_stop_floor_tp_pct = float((profile or {}).get("time_stop_floor_tp_pct", cfg.get("time_stop_floor_tp_pct", 0.20)))
+
         # Optional rebuild on regime change: close position and reset grid/cycles
         if rebuild_on_regime_change:
             state = regime_state.get(sym, {})
@@ -203,7 +208,20 @@ def run_backtest(
                 eng.reset_open_cycles()
 
         # Execute
-        eng.check_price(px, trader, ts, allow_buys=True)
+        # Trend-guard: no buys in TREND-down (sells remain allowed)
+        allow_buys = True
+        if bool((profile or {}).get("trend_guard_enable", cfg.get("trend_guard_enable", True))) and str(eff_reg) == "TREND":
+            lb = int((profile or {}).get("trend_guard_lookback", cfg.get("trend_guard_lookback", 30)))
+            thr = float((profile or {}).get("trend_guard_thr_pct", cfg.get("trend_guard_thr_pct", 0.0)))
+            if lb >= 2 and i >= lb:
+                try:
+                    ret_pct = (float(d["close"].iloc[i]) / float(d["close"].iloc[i - lb]) - 1.0) * 100.0
+                    if ret_pct <= -thr:
+                        allow_buys = False
+                except Exception:
+                    allow_buys = True
+
+        eng.check_price(px, trader, ts, allow_buys=allow_buys)
 
         # Log decision (interpretable)
         used_range_pct = float((profile or {}).get("range_pct", cfg.get("base_range_pct", 1.0)))
@@ -221,6 +239,7 @@ def run_backtest(
             "levels": used_levels,
             "order_size_base": base_order_size,
             "order_size_mult": os_mult,
+            "allow_buys": bool(allow_buys),
             "order_size_eff": float(eng.order_size),
             "cycle_tp_enable": bool(getattr(eng, "enable_cycle_tp", False)),
             "cycle_tp_pct": float(getattr(eng, "cycle_tp_pct", 0.35)),
