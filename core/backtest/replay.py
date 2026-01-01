@@ -213,9 +213,9 @@ def run_backtest(
         if bool((profile or {}).get("trend_guard_enable", cfg.get("trend_guard_enable", True))) and str(eff_reg) == "TREND":
             lb = int((profile or {}).get("trend_guard_lookback", cfg.get("trend_guard_lookback", 30)))
             thr = float((profile or {}).get("trend_guard_thr_pct", cfg.get("trend_guard_thr_pct", 0.0)))
-            if lb >= 2 and i >= lb:
+            if lb >= 2 and idx >= lb:
                 try:
-                    ret_pct = (float(d["close"].iloc[i]) / float(d["close"].iloc[i - lb]) - 1.0) * 100.0
+                    ret_pct = (float(d["close"].iloc[idx]) / float(d["close"].iloc[idx - lb]) - 1.0) * 100.0
                     if ret_pct <= -thr:
                         allow_buys = False
                 except Exception:
