@@ -35,6 +35,7 @@ if "start_pending" not in st.session_state:
 if "start_pending_ts" not in st.session_state:
     st.session_state.start_pending_ts = 0.0
 
+
 if "panic_flatten" not in st.session_state:
     st.session_state.panic_flatten = False
 
@@ -64,6 +65,11 @@ active_bundle = st.session_state.get('active_bundle', None)
 
 st.set_page_config(layout="wide")
 st.title("Grid Trading Bot – Bitvavo (Simulation + Panic Button + Auto-Pause)")
+
+# --- BB state (for mean-reversion buy-filter) ---
+if "bb_state" not in st.session_state:
+    st.session_state["bb_state"] = {}
+
 
 # --- Top controls: Start / Stop / Stop & Flatten / Reset ---
 c1, c2, c3, c4, c5 = st.columns(5)
@@ -470,13 +476,13 @@ for sym in symbols:
             if w >= 2 and "close" in df.columns:
                 mid = float(df["close"].rolling(w).mean().iloc[-1])
                 std = float(df["close"].rolling(w).std(ddof=0).iloc[-1])
-                st.session_state.bb_state[sym] = {"enable": True, "mid": mid, "std": std, "thr": float(cfg.get("bb_mr_z", 0.75))}
+                st.session_state["bb_state"][sym] = {"enable": True, "mid": mid, "std": std, "thr": float(cfg.get("bb_mr_z", 0.75))}
             else:
-                st.session_state.bb_state[sym] = {"enable": False}
+                st.session_state["bb_state"][sym] = {"enable": False}
         else:
-            st.session_state.bb_state[sym] = {"enable": False}
+            st.session_state["bb_state"][sym] = {"enable": False}
     except Exception:
-        st.session_state.bb_state[sym] = {"enable": False}
+        st.session_state["bb_state"][sym] = {"enable": False}
 
     with st.sidebar.expander(sym, expanded=False):
         cfg["grid_type"] = st.selectbox(
@@ -695,8 +701,6 @@ if "asset_halt" not in st.session_state:
     st.session_state.asset_halt = set()  # base assets halted due to stop
 if "pair_paused" not in st.session_state:
     st.session_state.pair_paused = set()  # symbols paused manually (no trading)
-if "bb_state" not in st.session_state:
-    st.session_state.bb_state = {}  # sym -> {"mid":..., "std":..., "thr":..., "ok_price_z":...}
 
 # --- Interpretable execution log (per pair)
 if "decision_log" not in st.session_state:
@@ -1171,7 +1175,7 @@ def buy_guard(symbol: str, amount_base: float, limit_price: float, ts):
 
     # 3) BB mean-reversion buy-filter (interpretable)
     try:
-        bs = st.session_state.bb_state.get(symbol)
+        bs = st.session_state["bb_state"].get(symbol)
         if bs and bool(bs.get("enable", False)):
             mid = float(bs.get("mid"))
             std = float(bs.get("std"))
@@ -1203,13 +1207,13 @@ for sym, df in dfs.items():
             if w >= 2 and "close" in df.columns:
                 mid = float(df["close"].rolling(w).mean().iloc[-1])
                 std = float(df["close"].rolling(w).std(ddof=0).iloc[-1])
-                st.session_state.bb_state[sym] = {"enable": True, "mid": mid, "std": std, "thr": float(cfg.get("bb_mr_z", 0.75))}
+                st.session_state["bb_state"][sym] = {"enable": True, "mid": mid, "std": std, "thr": float(cfg.get("bb_mr_z", 0.75))}
             else:
-                st.session_state.bb_state[sym] = {"enable": False}
+                st.session_state["bb_state"][sym] = {"enable": False}
         else:
-            st.session_state.bb_state[sym] = {"enable": False}
+            st.session_state["bb_state"][sym] = {"enable": False}
     except Exception:
-        st.session_state.bb_state[sym] = {"enable": False}
+        st.session_state["bb_state"][sym] = {"enable": False}
 
 
     # --- Effective order size (equity scaling) ---
