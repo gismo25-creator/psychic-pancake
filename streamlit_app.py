@@ -462,6 +462,22 @@ for sym in symbols:
     if sym not in st.session_state.pair_cfg:
         st.session_state.pair_cfg[sym] = default_cfg(sym)
     cfg = st.session_state.pair_cfg[sym]
+
+    # --- BB mean-reversion state (for buy-filter) ---
+    try:
+        if bool(cfg.get("bb_mr_enable", False)):
+            w = int(cfg.get("bb_mr_window", 20))
+            if w >= 2 and "close" in df.columns:
+                mid = float(df["close"].rolling(w).mean().iloc[-1])
+                std = float(df["close"].rolling(w).std(ddof=0).iloc[-1])
+                st.session_state.bb_state[sym] = {"enable": True, "mid": mid, "std": std, "thr": float(cfg.get("bb_mr_z", 0.75))}
+            else:
+                st.session_state.bb_state[sym] = {"enable": False}
+        else:
+            st.session_state.bb_state[sym] = {"enable": False}
+    except Exception:
+        st.session_state.bb_state[sym] = {"enable": False}
+
     with st.sidebar.expander(sym, expanded=False):
         cfg["grid_type"] = st.selectbox(
             f"{sym} grid type", ["Linear", "Fibonacci"],
@@ -542,6 +558,16 @@ for sym in symbols:
         cfg["order_size"] = st.number_input(
             f"{sym} order size (base)", value=float(cfg["order_size"]),
             min_value=0.0, format="%.6f", key=f"{sym}_osize"
+        )
+        st.markdown("**BB mean-reversion buy-filter**")
+        cfg["bb_mr_enable"] = st.checkbox(
+            f"{sym} BB mean-reversion filter", value=bool(cfg.get("bb_mr_enable", True)), key=f"{sym}_bbmr_en"
+        )
+        cfg["bb_mr_window"] = st.slider(
+            f"{sym} BB window", 10, 60, int(cfg.get("bb_mr_window", 20)), key=f"{sym}_bbmr_w"
+        )
+        cfg["bb_mr_z"] = st.slider(
+            f"{sym} Z-threshold (buy only if z <= -thr)", 0.0, 3.0, float(cfg.get("bb_mr_z", 0.75)), step=0.05, key=f"{sym}_bbmr_z"
         )
         cfg["enable_cycle_tp"] = st.checkbox(
             f"{sym} Cycle take-profit (per cycle)", value=bool(cfg.get("enable_cycle_tp", False)), key=f"{sym}_ctp_en"
@@ -669,6 +695,8 @@ if "asset_halt" not in st.session_state:
     st.session_state.asset_halt = set()  # base assets halted due to stop
 if "pair_paused" not in st.session_state:
     st.session_state.pair_paused = set()  # symbols paused manually (no trading)
+if "bb_state" not in st.session_state:
+    st.session_state.bb_state = {}  # sym -> {"mid":..., "std":..., "thr":..., "ok_price_z":...}
 
 # --- Interpretable execution log (per pair)
 if "decision_log" not in st.session_state:
@@ -1140,6 +1168,21 @@ def buy_guard(symbol: str, amount_base: float, limit_price: float, ts):
                 if (not math.isnan(c)) and c >= corr_threshold:
                     return False, f"CORRELATION_LIMIT: corr({symbol},{hs})={c:.2f} >= {corr_threshold:.2f}"
 
+
+    # 3) BB mean-reversion buy-filter (interpretable)
+    try:
+        bs = st.session_state.bb_state.get(symbol)
+        if bs and bool(bs.get("enable", False)):
+            mid = float(bs.get("mid"))
+            std = float(bs.get("std"))
+            thr = float(bs.get("thr"))
+            if (not math.isnan(mid)) and (not math.isnan(std)) and std > 0 and thr > 0:
+                z = (float(limit_price) - mid) / std
+                if z > -thr:
+                    return False, f"BB_MR_BLOCK: z={z:.2f} > -{thr:.2f}"
+    except Exception:
+        pass
+
     return True, "OK"
 
 
@@ -1152,6 +1195,22 @@ for sym, df in dfs.items():
     price = last_prices[sym]
     ts = last_ts_map[sym]
     cfg = st.session_state.pair_cfg[sym]
+
+    # --- BB mean-reversion state (for buy-filter) ---
+    try:
+        if bool(cfg.get("bb_mr_enable", False)):
+            w = int(cfg.get("bb_mr_window", 20))
+            if w >= 2 and "close" in df.columns:
+                mid = float(df["close"].rolling(w).mean().iloc[-1])
+                std = float(df["close"].rolling(w).std(ddof=0).iloc[-1])
+                st.session_state.bb_state[sym] = {"enable": True, "mid": mid, "std": std, "thr": float(cfg.get("bb_mr_z", 0.75))}
+            else:
+                st.session_state.bb_state[sym] = {"enable": False}
+        else:
+            st.session_state.bb_state[sym] = {"enable": False}
+    except Exception:
+        st.session_state.bb_state[sym] = {"enable": False}
+
 
     # --- Effective order size (equity scaling) ---
     eff_order_size = float(cfg["order_size"])

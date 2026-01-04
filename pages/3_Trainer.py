@@ -53,6 +53,12 @@ maker_fee = st.sidebar.number_input("Maker fee (%)", 0.0, 1.0, 0.10, step=0.01) 
 taker_fee = st.sidebar.number_input("Taker fee (%)", 0.0, 1.0, 0.25, step=0.01) / 100.0
 slippage = st.sidebar.number_input("Slippage (%)", 0.0, 1.0, 0.05, step=0.01) / 100.0
 
+st.sidebar.subheader("BB mean-reversion buy-filter (interpretable)")
+bb_mr_enable = st.sidebar.checkbox("Enable BB mean-reversion buy-filter", value=True,
+    help="Blocks new BUYs unless price/limit is sufficiently below the Bollinger mid-band (z-score threshold).")
+bb_mr_window = st.sidebar.slider("BB window", 10, 60, 20)
+bb_mr_z = st.sidebar.slider("Z-threshold (buy only if z <= -thr)", 0.0, 3.0, 0.75, step=0.05)
+
 st.sidebar.subheader("Regime stability")
 confirm_n = st.sidebar.slider("Regime confirmations", 1, 10, 3)
 cooldown_candles = st.sidebar.slider("Cooldown (candles)", 0, 200, 0, step=5)
@@ -330,6 +336,9 @@ if run:
         "order_size": float(order_size),
         "cycle_tp_enable": False,
         "cycle_tp_pct": 0.35,
+        "bb_mr_enable": bool(bb_mr_enable),
+        "bb_mr_window": int(bb_mr_window),
+        "bb_mr_z": float(bb_mr_z),
     }
 
     base_profiles = {
