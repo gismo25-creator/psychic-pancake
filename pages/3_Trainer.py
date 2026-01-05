@@ -53,6 +53,51 @@ maker_fee = st.sidebar.number_input("Maker fee (%)", 0.0, 1.0, 0.10, step=0.01) 
 taker_fee = st.sidebar.number_input("Taker fee (%)", 0.0, 1.0, 0.25, step=0.01) / 100.0
 slippage = st.sidebar.number_input("Slippage (%)", 0.0, 1.0, 0.05, step=0.01) / 100.0
 
+st.sidebar.subheader("Base strategy (used by trainer)")
+
+grid_type = st.sidebar.selectbox("Grid type", ["Linear", "Fibonacci"], index=0)
+base_range_pct = st.sidebar.slider("Base range ± (%)", 0.1, 20.0, 1.0, step=0.1)
+base_levels = None
+if grid_type == "Linear":
+    base_levels = st.sidebar.slider("Base levels", 3, 30, 12)
+order_size = st.sidebar.number_input("Base order size (base asset units)", min_value=0.0, value=0.001, format="%.6f")
+
+st.sidebar.subheader("Search space (optimizer candidates)")
+
+def _parse_csv_floats(s: str, default: list[float]) -> list[float]:
+    try:
+        vals = [float(x.strip()) for x in str(s).split(",") if x.strip() != ""]
+        return vals if vals else list(default)
+    except Exception:
+        return list(default)
+
+def _parse_csv_ints(s: str, default: list[int]) -> list[int]:
+    try:
+        vals = [int(float(x.strip())) for x in str(s).split(",") if x.strip() != ""]
+        return vals if vals else list(default)
+    except Exception:
+        return list(default)
+
+range_candidates_str = st.sidebar.text_input("Range candidates (%)", value="0.5, 1.0, 1.5, 2.0")
+levels_candidates_str = st.sidebar.text_input("Levels candidates", value="8, 10, 12, 14, 16")
+os_mult_candidates_str = st.sidebar.text_input("Order size mult candidates", value="0.6, 0.8, 1.0, 1.2")
+
+cycle_tp_mode = st.sidebar.selectbox("Cycle TP enable candidates", ["Both", "Enabled only", "Disabled only"], index=0)
+if cycle_tp_mode == "Both":
+    cycle_tp_enable = [False, True]
+elif cycle_tp_mode == "Enabled only":
+    cycle_tp_enable = [True]
+else:
+    cycle_tp_enable = [False]
+
+cycle_tp_pcts_str = st.sidebar.text_input("Cycle TP % candidates", value="0.20, 0.35, 0.50")
+
+# Parsed candidate lists used by SearchSpace
+range_candidates = _parse_csv_floats(range_candidates_str, default=[1.0])
+levels_candidates = _parse_csv_ints(levels_candidates_str, default=[12])
+os_mult_candidates = _parse_csv_floats(os_mult_candidates_str, default=[1.0])
+cycle_tp_pcts = _parse_csv_floats(cycle_tp_pcts_str, default=[0.35])
+
 st.sidebar.subheader("BB mean-reversion buy-filter (interpretable)")
 bb_mr_enable = st.sidebar.checkbox("Enable BB mean-reversion buy-filter", value=True,
     help="Blocks new BUYs unless price/limit is sufficiently below the Bollinger mid-band (z-score threshold).")
