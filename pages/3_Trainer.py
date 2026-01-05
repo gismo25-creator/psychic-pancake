@@ -111,9 +111,9 @@ trend_guard_enable = st.sidebar.checkbox(
     "Enable TREND downtrend guard (block BUYs)",
     value=True,
     help="When the effective regime is TREND and price has fallen over the lookback window beyond the threshold, new BUYs are blocked (SELLs still allowed)."
-)
-trend_lookback = st.sidebar.slider("Trend lookback (candles)", 8, 200, 48, step=4, disabled=(not trend_guard_enable))
-trend_down_thresh_pct = st.sidebar.slider("Downtrend threshold (%)", 0.1, 5.0, 1.0, step=0.1, disabled=(not trend_guard_enable))
+, key="trainer_trend_guard_enable")
+trend_lookback = st.sidebar.slider("Trend lookback (candles)", 8, 200, 48, step=4, disabled=(not trend_guard_enable), key="trainer_trend_lookback")
+trend_down_thresh_pct = st.sidebar.slider("Downtrend threshold (%)", 0.1, 5.0, 1.0, step=0.1, disabled=(not trend_guard_enable), key="trainer_trend_down_thresh_pct")
 
 # Time-stop per cycle: prevent long inventory hang by forcing more conservative exits after X hours
 st.sidebar.subheader("Inventory & trend guards (interpretable)")
@@ -132,19 +132,19 @@ enable_time_stop = st.sidebar.checkbox(
     "Enable time-stop per cycle",
     value=True,
     help="After a cycle has been open longer than X hours, apply an additional exit rule (e.g., net break-even) to reduce inventory hanging."
-)
-time_stop_hours = st.sidebar.slider("Time-stop age (hours)", 0.0, 72.0, 12.0, step=1.0, disabled=(not enable_time_stop))
+, key="trainer_enable_time_stop")
+time_stop_hours = st.sidebar.slider("Time-stop age (hours)", 0.0, 72.0, 12.0, step=1.0, disabled=(not enable_time_stop), key="trainer_time_stop_hours")
 time_stop_mode = st.sidebar.selectbox(
     "Time-stop mode",
     ["BREAK_EVEN_NET", "DECAY_TO_TP", "REDUCE_TO_TP"],
     index=0,
     disabled=(not enable_time_stop),
     help="BREAK_EVEN_NET: exit at net break-even (fees/slippage).\nDECAY_TO_TP: TP decays toward a floor as the cycle ages.\nREDUCE_TO_TP: after X hours use a lower fixed TP floor."
-)
+, key="trainer_time_stop_mode")
 # Always define a floor value (used only for DECAY_TO_TP / REDUCE_TO_TP)
 time_stop_tp_floor_pct = 0.25
 if enable_time_stop and time_stop_mode != "BREAK_EVEN_NET":
-    time_stop_tp_floor_pct = st.sidebar.slider("Time-stop TP floor (%)", 0.0, 2.0, 0.25, step=0.05)
+    time_stop_tp_floor_pct = st.sidebar.slider("Time-stop TP floor (%)", 0.0, 2.0, 0.25, step=0.05, key="trainer_time_stop_tp_floor_pct")
 
 rng_seed = st.sidebar.number_input("Random seed", min_value=0, value=1337, step=1)
 
