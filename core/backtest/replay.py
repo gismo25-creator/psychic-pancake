@@ -213,15 +213,31 @@ def run_backtest(
         if bool((profile or {}).get("trend_guard_enable", cfg.get("trend_guard_enable", True))) and str(eff_reg) == "TREND":
             lb = int((profile or {}).get("trend_guard_lookback", cfg.get("trend_guard_lookback", 30)))
             thr = float((profile or {}).get("trend_guard_thr_pct", cfg.get("trend_guard_thr_pct", 0.0)))
-            if lb >= 2 and i >= lb:
+            if lb >= 2 and idx >= lb:
                 try:
-                    ret_pct = (float(d["close"].iloc[i]) / float(d["close"].iloc[i - lb]) - 1.0) * 100.0
+                    ret_pct = (float(d["close"].iloc[idx]) / float(d["close"].iloc[idx - lb]) - 1.0) * 100.0
                     if ret_pct <= -thr:
                         allow_buys = False
                 except Exception:
                     allow_buys = True
 
-        eng.check_price(px, trader, ts, allow_buys=allow_buys)
+        # BB mean-reversion buy-filter: only allow BUYs when limit_price is sufficiently below BB mid.
+        bb_enable = bool((profile or {}).get("bb_mr_enable", cfg.get("bb_mr_enable", False)))
+        bb_thr = float((profile or {}).get("bb_mr_z", cfg.get("bb_mr_z", 0.75)))
+        def _buy_guard(symbol: str, amount_base: float, limit_price: float, ts_inner):
+            if bb_enable and bb_thr > 0:
+                try:
+                    mid = float(d["_bb_mid"].iloc[idx])
+                    std = float(d["_bb_std"].iloc[idx])
+                    if (not pd.isna(mid)) and (not pd.isna(std)) and std > 0:
+                        z = (float(limit_price) - mid) / std
+                        if z > -bb_thr:
+                            return False, f"BB_MR_BLOCK: z={z:.2f} > -{bb_thr:.2f}"
+                except Exception:
+                    pass
+            return True, "OK"
+
+        eng.check_price(px, trader, ts, allow_buys=allow_buys, buy_guard=_buy_guard)
 
         # Log decision (interpretable)
         used_range_pct = float((profile or {}).get("range_pct", cfg.get("base_range_pct", 1.0)))

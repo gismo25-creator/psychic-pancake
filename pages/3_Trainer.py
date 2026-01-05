@@ -1,9 +1,10 @@
 from pathlib import Path
 import json
+import os
 import pandas as pd
 import streamlit as st
 
-from core.profiles.registry import make_bundle, save_bundle, stable_hash_df, ensure_store_dir
+from core.profiles.registry import make_bundle, save_bundle, stable_hash_df, ensure_store_dir, list_bundles, load_bundle
 
 from core.backtest.data_store import load_or_fetch
 from core.backtest.replay import run_backtest
@@ -52,42 +53,37 @@ maker_fee = st.sidebar.number_input("Maker fee (%)", 0.0, 1.0, 0.10, step=0.01) 
 taker_fee = st.sidebar.number_input("Taker fee (%)", 0.0, 1.0, 0.25, step=0.01) / 100.0
 slippage = st.sidebar.number_input("Slippage (%)", 0.0, 1.0, 0.05, step=0.01) / 100.0
 
-st.sidebar.subheader("Regime stability")
-confirm_n = st.sidebar.slider("Regime confirmations", 1, 10, 3)
-cooldown_candles = st.sidebar.slider("Cooldown (candles)", 0, 200, 0, step=5)
+st.sidebar.subheader("BB mean-reversion buy-filter (interpretable)")
+bb_mr_enable = st.sidebar.checkbox("Enable BB mean-reversion buy-filter", value=True,
+    help="Blocks new BUYs unless price/limit is sufficiently below the Bollinger mid-band (z-score threshold).")
+bb_mr_window = st.sidebar.slider("BB window", 10, 60, 20)
+bb_mr_z = st.sidebar.slider("Z-threshold (buy only if z <= -thr)", 0.0, 3.0, 0.75, step=0.05)
 
-st.sidebar.subheader("Objective (interpretable)")
-dd_penalty = st.sidebar.slider("DD penalty (trainer objective)", 0.0, 10.0, 3.0, step=0.25)
-trade_penalty = st.sidebar.slider("Low-trade penalty", 0.0, 2.0, 0.0, step=0.05)
+st.sidebar.subheader("Inventory & trend guards (interpretable)")
 
-st.sidebar.subheader("Risk-adjusted test score")
-score_mode = st.sidebar.selectbox("Score mode", ["PnL / MaxDD (Calmar-like)", "PnL - λ·MaxDD"], index=0)
-lambda_dd = st.sidebar.slider("λ (only for PnL - λ·MaxDD)", 0.0, 50.0, 10.0, step=0.5)
-
-st.sidebar.subheader("Base grid (baseline)")
-grid_type = st.sidebar.selectbox("Grid type", ["Linear", "Fibonacci"], index=0)
-base_range_pct = st.sidebar.slider("Base range ± (%)", 0.1, 20.0, 1.0, step=0.1)
-base_levels = None
-if grid_type == "Linear":
-    base_levels = st.sidebar.slider("Base levels", 3, 30, 12)
-order_size = st.sidebar.number_input("Base order size (base asset)", min_value=0.0, value=0.001, format="%.6f")
-
-st.sidebar.subheader("Search space (fast)")
-range_candidates = st.sidebar.multiselect("Range candidates (%)", [0.6,0.8,1.0,1.3,1.6,2.0,2.5,3.0], default=[0.8,1.0,1.3,1.6,2.0])
-levels_candidates = st.sidebar.multiselect("Levels candidates", [6,8,10,12,14,16,18,20], default=[10,12,14,16])
-os_mult_candidates = st.sidebar.multiselect("Order-size mult candidates", [0.4,0.5,0.6,0.7,0.8,1.0,1.2,1.5,2.0], default=[0.6,0.8,1.0,1.2])
-cycle_tp_enable = st.sidebar.multiselect("Cycle TP enable", [False, True], default=[False, True])
-cycle_tp_pcts = st.sidebar.multiselect("Cycle TP (%) candidates", [0.15,0.20,0.35,0.50,0.80,1.00], default=[0.20,0.35,0.50,0.80])
-
-st.sidebar.subheader("Training speed")
-max_evals_per_regime = st.sidebar.slider(
-    "Max evals per regime (sampled)",
-    min_value=20,
-    max_value=800,
-    value=150,
-    step=10,
-    help="Begrenst het aantal backtests per regime door random sampling. Lager = sneller.",
+# Trend-guard (downtrend): block new BUYs in TREND-down regimes
+trend_guard_enable = st.sidebar.checkbox(
+    "Enable TREND downtrend guard (block BUYs)",
+    value=True,
+    help="When the effective regime is TREND and price has fallen over the lookback window beyond the threshold, new BUYs are blocked (SELLs still allowed)."
 )
+trend_lookback = st.sidebar.slider("Trend lookback (candles)", 8, 200, 48, step=4, disabled=(not trend_guard_enable))
+trend_down_thresh_pct = st.sidebar.slider("Downtrend threshold (%)", 0.1, 5.0, 1.0, step=0.1, disabled=(not trend_guard_enable))
+
+# Time-stop per cycle: prevent long inventory hang by forcing more conservative exits after X hours
+enable_time_stop = st.sidebar.checkbox(
+    "Enable time-stop per cycle",
+    value=True,
+    help="After a cycle has been open for longer than X hours, apply an additional exit rule (e.g., net break-even) to avoid inventory hanging through the fold end."
+)
+time_stop_hours = st.sidebar.slider("Time-stop age (hours)", 0.0, 72.0, 12.0, step=1.0, disabled=(not enable_time_stop))
+time_stop_mode = st.sidebar.selectbox(
+    "Time-stop mode",
+    ["BREAK_EVEN_NET", "DECAY_TO_TP", "REDUCE_TO_TP"],
+    index=0,
+    disabled=(not enable_time_stop),
+    help="BREAK_EVEN_NET: exit at net break-even (fees/slippage).\nDECAY_TO_TP: TP decays toward a floor as the cycle ages.\nREDUCE_TO_TP: after X hours use a lower fixed TP floor."
+    )
 rng_seed = st.sidebar.number_input("Random seed", min_value=0, value=1337, step=1)
 
 st.sidebar.subheader("Best-overall selection")
@@ -159,6 +155,75 @@ if "trained_profiles_best" not in st.session_state:
     st.session_state.trained_profiles_best = None
 if "trainer_fold_details" not in st.session_state:
     st.session_state.trainer_fold_details = None
+
+# --- Persistence: reload last bundle if session resets (Streamlit reruns/reconnects)
+store_dir = ensure_store_dir()
+if "last_bundle_path" not in st.session_state:
+    st.session_state.last_bundle_path = None
+
+st.sidebar.subheader("Results persistence")
+auto_reload_last = st.sidebar.checkbox(
+    "Auto-reload last saved bundle",
+    value=True,
+    help="If the session reruns/reconnects, reload the most recent saved bundle so results remain visible."
+)
+
+bundles = list_bundles(store_dir)
+selected_bundle = None
+if bundles:
+    default_idx = 0
+    if st.session_state.last_bundle_path in bundles:
+        default_idx = bundles.index(st.session_state.last_bundle_path)
+    selected_bundle = st.sidebar.selectbox(
+        "Load bundle from disk",
+        options=bundles,
+    index=default_idx,
+        format_func=lambda p: os.path.basename(p),
+    help="Select a previously saved bundle to view/inspect."
+    )
+    if st.sidebar.button("Load selected bundle", use_container_width=True):
+        st.session_state._force_load_bundle = True
+
+def _apply_loaded_bundle(bundle: dict) -> None:
+    # Keep display compatible with existing UI
+    st.session_state.trained_profiles = bundle.get("profiles")
+    st.session_state.trained_profiles_best = bundle.get("profiles")
+    meta = bundle.get("meta", {}) or {}
+    st.session_state.last_bundle_path = bundle.get("path") or st.session_state.last_bundle_path
+
+    # Optional: restore report/fold tables if present
+    rep = meta.get("trainer_report_rows")
+    if rep:
+        try:
+            st.session_state.trainer_report = pd.DataFrame(rep)
+        except Exception:
+            pass
+    folds = meta.get("fold_rows") or meta.get("trainer_fold_rows")
+    if folds:
+        try:
+            st.session_state.trainer_fold_details = pd.DataFrame(folds)
+        except Exception:
+            pass
+
+# Auto reload on cold start / session reset
+if auto_reload_last and (st.session_state.trained_profiles is None) and bundles:
+    try:
+        bpath = selected_bundle or bundles[0]
+        b = load_bundle(bpath)
+        b["path"] = bpath
+        _apply_loaded_bundle(b)
+    except Exception:
+        pass
+
+# Manual forced reload
+if st.session_state.get("_force_load_bundle", False) and selected_bundle:
+    try:
+        b = load_bundle(selected_bundle)
+        b["path"] = selected_bundle
+        _apply_loaded_bundle(b)
+    finally:
+        st.session_state._force_load_bundle = False
+
 
 
 def _risk_score(total_pnl: float, max_dd_frac: float) -> float:
@@ -260,6 +325,16 @@ if run:
         "order_size": float(order_size),
         "cycle_tp_enable": False,
         "cycle_tp_pct": 0.35,
+        "bb_mr_enable": bool(bb_mr_enable),
+        "bb_mr_window": int(bb_mr_window),
+        "bb_mr_z": float(bb_mr_z),
+        "trend_guard_enable": bool(trend_guard_enable),
+        "trend_lookback": int(trend_lookback),
+        "trend_down_thresh_pct": float(trend_down_thresh_pct),
+        "enable_time_stop": bool(enable_time_stop),
+        "time_stop_hours": float(time_stop_hours),
+        "time_stop_mode": str(time_stop_mode),
+        "time_stop_tp_floor_pct": float(time_stop_tp_floor_pct),
     }
 
     base_profiles = {
@@ -743,6 +818,17 @@ if run:
                     "train_max_dd_pct": float(best_train.get("max_drawdown", 0.0)) * 100.0,
                     "train_win_rate_pct": float(best_train.get("win_rate", 0.0)) * 100.0 if best_train.get("win_rate") == best_train.get("win_rate") else float("nan"),
                     "train_trades": _get_num_trades(best_train),
+# Guard / filter settings (from base_cfg)
+"bb_mr_enable": bool(base_cfg.get("bb_mr_enable", False)),
+"bb_mr_window": int(base_cfg.get("bb_mr_window", 20)),
+"bb_mr_z": float(base_cfg.get("bb_mr_z", 0.0)),
+"trend_guard_enable": bool(base_cfg.get("trend_guard_enable", False)),
+"trend_lookback": int(base_cfg.get("trend_lookback", 0)),
+"trend_down_thresh_pct": float(base_cfg.get("trend_down_thresh_pct", 0.0)),
+"enable_time_stop": bool(base_cfg.get("enable_time_stop", False)),
+"time_stop_hours": float(base_cfg.get("time_stop_hours", 0.0)),
+"time_stop_mode": str(base_cfg.get("time_stop_mode", "")),
+"time_stop_tp_floor_pct": float(base_cfg.get("time_stop_tp_floor_pct", 0.0)),
                     "test_score_avg": float(pd.Series(test_scores).mean()),
                     "test_score_med": float(pd.Series(test_scores).median()),
                     "test_total_pnl_avg": float(pd.Series(test_pnls).mean()),
