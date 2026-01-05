@@ -146,6 +146,26 @@ time_stop_tp_floor_pct = 0.25
 if enable_time_stop and time_stop_mode != "BREAK_EVEN_NET":
     time_stop_tp_floor_pct = st.sidebar.slider("Time-stop TP floor (%)", 0.0, 2.0, 0.25, step=0.05, key="trainer_time_stop_tp_floor_pct")
 
+st.sidebar.subheader("Regime hysteresis (stability)")
+confirm_n = st.sidebar.slider(
+    "Confirmations required",
+    min_value=1,
+    max_value=10,
+    value=3,
+    step=1,
+    key="trainer_confirm_n",
+    help="Effective regime changes only after N identical classifications (reduces churn).",
+)
+cooldown_candles = st.sidebar.slider(
+    "Cooldown (candles)",
+    min_value=0,
+    max_value=500,
+    value=35,
+    step=1,
+    key="trainer_cooldown_candles",
+    help="Minimum candles between regime changes (additional hysteresis).",
+)
+
 rng_seed = st.sidebar.number_input("Random seed", min_value=0, value=1337, step=1)
 
 st.sidebar.subheader("Best-overall selection")
