@@ -227,6 +227,26 @@ use_median_tiebreak = st.sidebar.checkbox(
 
 
 
+st.sidebar.subheader("Objective weights (scoring)")
+dd_penalty = st.sidebar.slider(
+    "Drawdown penalty weight",
+    min_value=0.0,
+    max_value=500.0,
+    value=100.0,
+    step=5.0,
+    key="trainer_dd_penalty",
+    help="Higher penalizes drawdowns more strongly in the optimizer score."
+)
+trade_penalty = st.sidebar.slider(
+    "Low-trade penalty weight",
+    min_value=0.0,
+    max_value=500.0,
+    value=50.0,
+    step=5.0,
+    key="trainer_trade_penalty",
+    help="Higher penalizes strategies with too few trades (helps avoid overfitting via inactivity)."
+)
+
 run = st.sidebar.button("▶ Train (multi-fold WF)", width="stretch")
 
 if "trained_profiles" not in st.session_state:
