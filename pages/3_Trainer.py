@@ -247,6 +247,17 @@ trade_penalty = st.sidebar.slider(
     help="Higher penalizes strategies with too few trades (helps avoid overfitting via inactivity)."
 )
 
+st.sidebar.subheader("Optimizer budget")
+max_evals_per_regime = st.sidebar.number_input(
+    "Max evals per regime",
+    min_value=10,
+    max_value=5000,
+    value=250,
+    step=10,
+    key="trainer_max_evals_per_regime",
+    help="Limits the number of candidate evaluations per regime (keeps training bounded)."
+)
+
 run = st.sidebar.button("▶ Train (multi-fold WF)", width="stretch")
 
 if "trained_profiles" not in st.session_state:
