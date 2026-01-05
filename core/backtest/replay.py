@@ -221,23 +221,7 @@ def run_backtest(
                 except Exception:
                     allow_buys = True
 
-        # BB mean-reversion buy-filter: only allow BUYs when limit_price is sufficiently below BB mid.
-        bb_enable = bool((profile or {}).get("bb_mr_enable", cfg.get("bb_mr_enable", False)))
-        bb_thr = float((profile or {}).get("bb_mr_z", cfg.get("bb_mr_z", 0.75)))
-        def _buy_guard(symbol: str, amount_base: float, limit_price: float, ts_inner):
-            if bb_enable and bb_thr > 0:
-                try:
-                    mid = float(d["_bb_mid"].iloc[idx])
-                    std = float(d["_bb_std"].iloc[idx])
-                    if (not pd.isna(mid)) and (not pd.isna(std)) and std > 0:
-                        z = (float(limit_price) - mid) / std
-                        if z > -bb_thr:
-                            return False, f"BB_MR_BLOCK: z={z:.2f} > -{bb_thr:.2f}"
-                except Exception:
-                    pass
-            return True, "OK"
-
-        eng.check_price(px, trader, ts, allow_buys=allow_buys, buy_guard=_buy_guard)
+        eng.check_price(px, trader, ts, allow_buys=allow_buys)
 
         # Log decision (interpretable)
         used_range_pct = float((profile or {}).get("range_pct", cfg.get("base_range_pct", 1.0)))
