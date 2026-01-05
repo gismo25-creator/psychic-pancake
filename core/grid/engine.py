@@ -220,61 +220,61 @@ class GridEngine:
                     "reason": tr.reason,
                 })
 
-        # ----------------------------
-        # Time-stop per cycle (optional)
-        # ----------------------------
-        if bool(getattr(self, "enable_time_stop", False)) and float(getattr(self, "time_stop_hours", 0.0)) > 0.0:
-            max_h = float(getattr(self, "time_stop_hours", 0.0))
-            mode = str(getattr(self, "time_stop_mode", "BREAK_EVEN_NET")).upper()
-            floor_tp = float(getattr(self, "time_stop_floor_tp_pct", 0.0))
+# ----------------------------
+# Time-stop per cycle (optional)
+# ----------------------------
+if bool(getattr(self, "enable_time_stop", False)) and float(getattr(self, "time_stop_hours", 0.0)) > 0.0:
+    max_h = float(getattr(self, "time_stop_hours", 0.0))
+    mode = str(getattr(self, "time_stop_mode", "BREAK_EVEN_NET")).upper()
+    floor_tp = float(getattr(self, "time_stop_floor_tp_pct", 0.0))
 
-            for buy_level, oc in list(self.open_cycles.items()):
-                age_h = self._age_hours(ts, oc.buy_time)
-                if age_h < max_h:
-                    continue
+    for buy_level, oc in list(self.open_cycles.items()):
+        age_h = self._age_hours(ts, oc.buy_time)
+        if age_h < max_h:
+            continue
 
-                if mode == "DECAY_TO_TP":
-                    base_tp = float(getattr(self, "cycle_tp_pct", 0.0))
-                    frac = min(1.0, max(0.0, age_h / max_h))
-                    eff_tp = max(floor_tp, base_tp * (1.0 - frac))
-                    target_price = float(oc.buy_price) * (1.0 + eff_tp / 100.0)
-                elif mode == "REDUCE_TO_TP":
-                    target_price = float(oc.buy_price) * (1.0 + floor_tp / 100.0)
-                else:
-                    target_price = float(oc.buy_price)
+        if mode == "DECAY_TO_TP":
+            base_tp = float(getattr(self, "cycle_tp_pct", 0.0))
+            frac = min(1.0, max(0.0, age_h / max_h))
+            eff_tp = max(floor_tp, base_tp * (1.0 - frac))
+            target_price = float(oc.buy_price) * (1.0 + eff_tp / 100.0)
+        elif mode == "REDUCE_TO_TP":
+            target_price = float(oc.buy_price) * (1.0 + floor_tp / 100.0)
+        else:
+            target_price = float(oc.buy_price)
 
-                be_limit = self._net_breakeven_limit(trader, oc)
-                exit_price = max(float(target_price), float(be_limit))
+        be_limit = self._net_breakeven_limit(trader, oc)
+        exit_price = max(float(target_price), float(be_limit))
 
-                if price >= exit_price:
-                    tr = trader.sell(self.symbol, float(exit_price), float(oc.amount), ts, reason="TIME_STOP")
-                    if tr is None:
-                        continue
+        if price >= exit_price:
+            tr = trader.sell(self.symbol, float(exit_price), float(oc.amount), ts, reason="TIME_STOP")
+            if tr is None:
+                continue
 
-                    cash_in = float(tr.cash_delta_quote)
-                    pnl = cash_in - float(oc.cash_out)
+            cash_in = float(tr.cash_delta_quote)
+            pnl = cash_in - float(oc.cash_out)
 
-                    self.closed_cycles.append({
-                        "symbol": tr.symbol,
-                        "buy_time": oc.buy_time, "sell_time": tr.time,
-                        "buy_price": float(oc.buy_price), "sell_price": float(tr.price),
-                        "amount": float(tr.amount),
-                        "cash_out": float(oc.cash_out), "cash_in": cash_in,
-                        "pnl": pnl,
-                    })
+            self.closed_cycles.append({
+                "symbol": tr.symbol,
+                "buy_time": oc.buy_time, "sell_time": tr.time,
+                "buy_price": float(oc.buy_price), "sell_price": float(tr.price),
+                "amount": float(tr.amount),
+                "cash_out": float(oc.cash_out), "cash_in": cash_in,
+                "pnl": pnl,
+            })
 
-                    sell_level = self._next(buy_level)
-                    if sell_level in self.active_sells:
-                        self.active_sells.remove(sell_level)
+            sell_level = self._next(buy_level)
+            if sell_level in self.active_sells:
+                self.active_sells.remove(sell_level)
 
-                    self.open_cycles.pop(buy_level, None)
-                    self.active_buys.add(buy_level)
+            self.open_cycles.pop(buy_level, None)
+            self.active_buys.add(buy_level)
 
-                    self.trades.append({
-                        "time": tr.time, "symbol": tr.symbol, "side": tr.side,
-                        "price": float(tr.price), "amount": float(tr.amount),
-                        "fee_rate": float(tr.fee_rate), "fee_paid": float(tr.fee_paid_quote),
-                        "cash_delta": float(tr.cash_delta_quote),
-                        "pnl": pnl,
-                        "reason": tr.reason,
-                    })
+            self.trades.append({
+                "time": tr.time, "symbol": tr.symbol, "side": tr.side,
+                "price": float(tr.price), "amount": float(tr.amount),
+                "fee_rate": float(tr.fee_rate), "fee_paid": float(tr.fee_paid_quote),
+                "cash_delta": float(tr.cash_delta_quote),
+                "pnl": pnl,
+                "reason": tr.reason,
+            })

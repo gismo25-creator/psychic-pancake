@@ -1,10 +1,9 @@
 from pathlib import Path
 import json
-import os
 import pandas as pd
 import streamlit as st
 
-from core.profiles.registry import make_bundle, save_bundle, stable_hash_df, ensure_store_dir, list_bundles, load_bundle
+from core.profiles.registry import make_bundle, save_bundle, stable_hash_df, ensure_store_dir
 
 from core.backtest.data_store import load_or_fetch
 from core.backtest.replay import run_backtest
@@ -160,75 +159,6 @@ if "trained_profiles_best" not in st.session_state:
     st.session_state.trained_profiles_best = None
 if "trainer_fold_details" not in st.session_state:
     st.session_state.trainer_fold_details = None
-
-# --- Persistence: reload last bundle if session resets (Streamlit reruns/reconnects)
-store_dir = ensure_store_dir()
-if "last_bundle_path" not in st.session_state:
-    st.session_state.last_bundle_path = None
-
-st.sidebar.subheader("Results persistence")
-auto_reload_last = st.sidebar.checkbox(
-    "Auto-reload last saved bundle",
-    value=True,
-    help="If the session reruns/reconnects, reload the most recent saved bundle so results remain visible."
-)
-
-bundles = list_bundles(store_dir)
-selected_bundle = None
-if bundles:
-    default_idx = 0
-    if st.session_state.last_bundle_path in bundles:
-        default_idx = bundles.index(st.session_state.last_bundle_path)
-    selected_bundle = st.sidebar.selectbox(
-        "Load bundle from disk",
-        options=bundles,
-        index=default_idx,
-        format_func=lambda p: os.path.basename(p),
-        help="Select a previously saved bundle to view/inspect."
-    )
-    if st.sidebar.button("Load selected bundle", use_container_width=True):
-        st.session_state._force_load_bundle = True
-
-def _apply_loaded_bundle(bundle: dict) -> None:
-    # Keep display compatible with existing UI
-    st.session_state.trained_profiles = bundle.get("profiles")
-    st.session_state.trained_profiles_best = bundle.get("profiles")
-    meta = bundle.get("meta", {}) or {}
-    st.session_state.last_bundle_path = bundle.get("path") or st.session_state.last_bundle_path
-
-    # Optional: restore report/fold tables if present
-    rep = meta.get("trainer_report_rows")
-    if rep:
-        try:
-            st.session_state.trainer_report = pd.DataFrame(rep)
-        except Exception:
-            pass
-    folds = meta.get("fold_rows") or meta.get("trainer_fold_rows")
-    if folds:
-        try:
-            st.session_state.trainer_fold_details = pd.DataFrame(folds)
-        except Exception:
-            pass
-
-# Auto reload on cold start / session reset
-if auto_reload_last and (st.session_state.trained_profiles is None) and bundles:
-    try:
-        bpath = selected_bundle or bundles[0]
-        b = load_bundle(bpath)
-        b["path"] = bpath
-        _apply_loaded_bundle(b)
-    except Exception:
-        pass
-
-# Manual forced reload
-if st.session_state.get("_force_load_bundle", False) and selected_bundle:
-    try:
-        b = load_bundle(selected_bundle)
-        b["path"] = selected_bundle
-        _apply_loaded_bundle(b)
-    finally:
-        st.session_state._force_load_bundle = False
-
 
 
 def _risk_score(total_pnl: float, max_dd_frac: float) -> float:
