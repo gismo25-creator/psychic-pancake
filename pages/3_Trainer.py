@@ -227,6 +227,24 @@ use_median_tiebreak = st.sidebar.checkbox(
 
 
 
+st.sidebar.subheader("Scoring (optimizer objective)")
+score_mode = st.sidebar.selectbox(
+    "Score mode",
+    ["PnL - λ·DD", "PnL / DD"],
+    index=0,
+    key="trainer_score_mode",
+    help="PnL - λ·DD: linear penalty on drawdown. PnL / DD: risk-adjusted ratio (higher is better)."
+)
+lambda_dd = st.sidebar.slider(
+    "λ (drawdown penalty)",
+    min_value=0.0,
+    max_value=500.0,
+    value=100.0,
+    step=5.0,
+    key="trainer_lambda_dd",
+    help="Used only for PnL - λ·DD mode."
+)
+
 st.sidebar.subheader("Objective weights (scoring)")
 dd_penalty = st.sidebar.slider(
     "Drawdown penalty weight",
@@ -342,7 +360,7 @@ if st.session_state.get("_force_load_bundle", False) and selected_bundle:
 def _risk_score(total_pnl: float, max_dd_frac: float) -> float:
     dd = max(1e-9, float(max_dd_frac))
     pnl = float(total_pnl)
-    if score_mode.startswith("PnL /"):
+    if str(score_mode).startswith("PnL /") or str(score_mode).startswith("PnL / DD"):
         return pnl / dd
     return pnl - float(lambda_dd) * dd
 
