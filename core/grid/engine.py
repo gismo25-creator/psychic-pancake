@@ -186,15 +186,30 @@ class GridEngine:
         for sell in list(self.active_sells):
             if price >= sell:
                 buy_level = self._prev(sell)
-                oc = self.open_cycles.pop(buy_level, None)
+                oc = self.open_cycles.get(buy_level)
                 if oc is None:
                     continue
 
-                tr = trader.sell(self.symbol, float(sell), float(oc.amount), ts, reason="GRID")
-                if tr is None:
-                    # restore if not filled
-                    self.open_cycles[buy_level] = oc
+                # Floor-aware grid exit (Option B): do not sell below net break-even and/or cycle TP target.
+                be_limit = self._net_breakeven_limit(trader, oc)
+                exit_price = max(float(sell), float(be_limit))
+
+                if bool(getattr(self, "enable_cycle_tp", False)) and float(getattr(self, "cycle_tp_pct", 0.0)) > 0.0:
+                    tp_mult = 1.0 + (float(getattr(self, "cycle_tp_pct", 0.0)) / 100.0)
+                    tp_price = float(oc.buy_price) * tp_mult
+                    exit_price = max(exit_price, float(tp_price))
+
+                # Only execute once price reaches the computed floor.
+                if price < float(exit_price):
                     continue
+
+                reason = "GRID_FLOOR" if float(exit_price) > float(sell) else "GRID"
+                tr = trader.sell(self.symbol, float(exit_price), float(oc.amount), ts, reason=reason)
+                if tr is None:
+                    continue
+
+                # Remove the open cycle only after successful execution
+                self.open_cycles.pop(buy_level, None)
 
                 cash_in = float(tr.cash_delta_quote)
                 pnl = cash_in - float(oc.cash_out)
@@ -220,7 +235,6 @@ class GridEngine:
                     "reason": tr.reason,
                 })
 
-        # ----------------------------
         # Time-stop per cycle (optional)
         # ----------------------------
         if bool(getattr(self, "enable_time_stop", False)) and float(getattr(self, "time_stop_hours", 0.0)) > 0.0:
