@@ -1,11 +1,15 @@
 from __future__ import annotations
 
 import os
+import re
 from dataclasses import dataclass
 from typing import Optional
 
 import pandas as pd
 import requests
+
+from core.market_data import BitvavoRateLimitBan  # shared ban exception
+
 
 
 def _to_utc_ts(x) -> pd.Timestamp:
@@ -47,6 +51,20 @@ def save_cache(symbol: str, timeframe: str, df: pd.DataFrame) -> str:
     df2 = df.copy()
     df2.to_csv(path, index=False)
     return path
+
+
+_BAN_EXPIRES_RE = re.compile(r"(?:expires\s+at\s+)(\d{13})")
+
+def _extract_ban_until_ms_from_text(msg: str) -> Optional[int]:
+    if not msg:
+        return None
+    m = _BAN_EXPIRES_RE.search(msg)
+    if m:
+        try:
+            return int(m.group(1))
+        except Exception:
+            return None
+    return None
 
 
 def fetch_ohlcv_range_bitvavo(
@@ -124,6 +142,15 @@ def fetch_ohlcv_range_bitvavo(
         r = requests.get(url, params=params, timeout=20)
         r.raise_for_status()
         data = r.json()
+
+        # Bitvavo rate-limit ban (errorCode 105): stop and bubble up with expiry if provided
+        if isinstance(data, dict) and data.get("errorCode") == 105:
+            msg = str(data.get("error") or data)
+            until = _extract_ban_until_ms_from_text(msg)
+            if until is None:
+                until = int(pd.Timestamp.utcnow().timestamp() * 1000) + 60_000
+            raise BitvavoRateLimitBan(banned_until_ms=int(until), message=f"bitvavo {data}")
+
 
         if not data:
             break

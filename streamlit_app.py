@@ -11,7 +11,21 @@ import streamlit as st
 import plotly.graph_objects as go
 from streamlit_autorefresh import st_autorefresh
 
-from core.market_data import fetch_ohlcv_bitvavo, fetch_ticker_bitvavo
+from core.market_data import (fetch_ohlcv_bitvavo_cached, fetch_ticker_bitvavo_cached, BitvavoRateLimitBan)
+
+# ----------------------------
+# Bitvavo rate-limit ban guard
+# ----------------------------
+def _bitvavo_is_banned() -> bool:
+    until_ms = int(st.session_state.get('bitvavo_banned_until_ms', 0) or 0)
+    now_ms = int(time.time() * 1000)
+    if until_ms > now_ms:
+        # show once per rerun
+        remaining_s = max(0, (until_ms - now_ms) // 1000)
+        st.sidebar.error(f"Bitvavo rate-limit ban active (~{remaining_s}s remaining). Data fetches are paused.")
+        return True
+    return False
+
 from core.grid.linear import generate_linear_grid
 from core.grid.fibonacci import generate_fibonacci_grid
 from core.grid.engine import GridEngine
@@ -717,8 +731,15 @@ atr_abs: Dict[str, float] = {}  # per symbol
 vol_cluster_map: Dict[str, float] = {}  # per symbol
 
 for sym in symbols:
+    if _bitvavo_is_banned():
+        st.error(f"Data fetch paused due to Bitvavo ban: {sym}")
+        continue
     try:
-        df = fetch_ohlcv_bitvavo(sym, timeframe=timeframe, limit=300)
+        df = fetch_ohlcv_bitvavo_cached(sym, timeframe=timeframe, limit=300)
+    except BitvavoRateLimitBan as e:
+        st.session_state['bitvavo_banned_until_ms'] = int(e.banned_until_ms)
+        st.error(f"Data error for {sym}: {e}")
+        continue
     except Exception as e:
         st.error(f"Data error for {sym}: {e}")
         continue
@@ -726,12 +747,14 @@ for sym in symbols:
     last_prices[sym] = float(df["close"].iloc[-1])
     if exec_mode.startswith("Dry-run"):
         try:
-            t = fetch_ticker_bitvavo(sym)
+            t = fetch_ticker_bitvavo_cached(sym)
             bid = t.get("bid"); ask = t.get("ask"); last = t.get("last")
             if (bid is not None) and (ask is not None):
                 last_prices[sym] = float((bid + ask) / 2.0)
             elif last is not None:
                 last_prices[sym] = float(last)
+        except BitvavoRateLimitBan as e:
+            st.session_state['bitvavo_banned_until_ms'] = int(e.banned_until_ms)
         except Exception:
             pass
     last_ts_map[sym] = df["timestamp"].iloc[-1]
