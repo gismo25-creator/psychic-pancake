@@ -30,253 +30,254 @@ st.info(
 # ----------------------------
 # Sidebar
 # ----------------------------
-st.sidebar.subheader("Data")
-symbols = st.sidebar.multiselect(
-    "Symbols",
-    ["BTC/EUR", "ETH/EUR", "SOL/EUR", "XRP/EUR", "ADA/EUR"],
-    default=["BTC/EUR"],
-)
-timeframe = st.sidebar.selectbox("Timeframe", ["1m", "5m", "15m"], index=1)
-lookback_days = st.sidebar.slider("Lookback (days)", 7, 365, 90)
-force_refresh = st.sidebar.checkbox("Force refresh OHLCV cache", value=False)
+with st.sidebar.form("trainer_cfg_form"):
+    st.sidebar.subheader("Data")
+    symbols = st.sidebar.multiselect(
+        "Symbols",
+        ["BTC/EUR", "ETH/EUR", "SOL/EUR", "XRP/EUR", "ADA/EUR"],
+        default=["BTC/EUR"],
+    )
+    timeframe = st.sidebar.selectbox("Timeframe", ["1m", "5m", "15m"], index=1)
+    lookback_days = st.sidebar.slider("Lookback (days)", 7, 365, 90)
+    force_refresh = st.sidebar.checkbox("Force refresh OHLCV cache", value=False)
 
-st.sidebar.subheader("Walk-forward (rolling folds)")
-folds = st.sidebar.slider("Folds", 2, 8, 4)
-test_window_days = st.sidebar.slider("Test window (days)", 1, 60, 14)
-step_days = st.sidebar.slider("Step (days)", 1, 60, 14, help="Hoeveel dagen het window opschuift per fold.")
-min_train_days = st.sidebar.slider("Min train (days)", 7, 180, 30)
+    st.sidebar.subheader("Walk-forward (rolling folds)")
+    folds = st.sidebar.slider("Folds", 2, 8, 4)
+    test_window_days = st.sidebar.slider("Test window (days)", 1, 60, 14)
+    step_days = st.sidebar.slider("Step (days)", 1, 60, 14, help="Hoeveel dagen het window opschuift per fold.")
+    min_train_days = st.sidebar.slider("Min train (days)", 7, 180, 30)
 
-st.sidebar.subheader("Fees / slippage (simulation)")
-start_cash = st.sidebar.number_input("Start cash (EUR)", min_value=0.0, value=1000.0, step=100.0)
-fee_mode = st.sidebar.selectbox("Assume fills as", ["taker", "maker"], index=0)
-maker_fee = st.sidebar.number_input("Maker fee (%)", 0.0, 1.0, 0.10, step=0.01) / 100.0
-taker_fee = st.sidebar.number_input("Taker fee (%)", 0.0, 1.0, 0.25, step=0.01) / 100.0
-slippage = st.sidebar.number_input("Slippage (%)", 0.0, 1.0, 0.05, step=0.01) / 100.0
+    st.sidebar.subheader("Fees / slippage (simulation)")
+    start_cash = st.sidebar.number_input("Start cash (EUR)", min_value=0.0, value=1000.0, step=100.0)
+    fee_mode = st.sidebar.selectbox("Assume fills as", ["taker", "maker"], index=0)
+    maker_fee = st.sidebar.number_input("Maker fee (%)", 0.0, 1.0, 0.10, step=0.01) / 100.0
+    taker_fee = st.sidebar.number_input("Taker fee (%)", 0.0, 1.0, 0.25, step=0.01) / 100.0
+    slippage = st.sidebar.number_input("Slippage (%)", 0.0, 1.0, 0.05, step=0.01) / 100.0
 
-st.sidebar.subheader("Base strategy (used by trainer)")
+    st.sidebar.subheader("Base strategy (used by trainer)")
 
-grid_type = st.sidebar.selectbox("Grid type", ["Linear", "Fibonacci"], index=0)
-base_range_pct = st.sidebar.slider("Base range ± (%)", 0.1, 20.0, 1.0, step=0.1)
-base_levels = None
-if grid_type == "Linear":
-    base_levels = st.sidebar.slider("Base levels", 3, 30, 12)
-order_size = st.sidebar.number_input("Base order size (base asset units)", min_value=0.0, value=0.001, format="%.6f")
+    grid_type = st.sidebar.selectbox("Grid type", ["Linear", "Fibonacci"], index=0)
+    base_range_pct = st.sidebar.slider("Base range ± (%)", 0.1, 20.0, 1.0, step=0.1)
+    base_levels = None
+    if grid_type == "Linear":
+        base_levels = st.sidebar.slider("Base levels", 3, 30, 12)
+    order_size = st.sidebar.number_input("Base order size (base asset units)", min_value=0.0, value=0.001, format="%.6f")
 
-st.sidebar.subheader("Search space (optimizer candidates)")
+    st.sidebar.subheader("Search space (optimizer candidates)")
 
-def _parse_csv_floats(s: str, default: list[float]) -> list[float]:
-    try:
-        vals = [float(x.strip()) for x in str(s).split(",") if x.strip() != ""]
-        return vals if vals else list(default)
-    except Exception:
-        return list(default)
+    def _parse_csv_floats(s: str, default: list[float]) -> list[float]:
+        try:
+            vals = [float(x.strip()) for x in str(s).split(",") if x.strip() != ""]
+            return vals if vals else list(default)
+        except Exception:
+            return list(default)
 
-def _parse_csv_ints(s: str, default: list[int]) -> list[int]:
-    try:
-        vals = [int(float(x.strip())) for x in str(s).split(",") if x.strip() != ""]
-        return vals if vals else list(default)
-    except Exception:
-        return list(default)
+    def _parse_csv_ints(s: str, default: list[int]) -> list[int]:
+        try:
+            vals = [int(float(x.strip())) for x in str(s).split(",") if x.strip() != ""]
+            return vals if vals else list(default)
+        except Exception:
+            return list(default)
 
-range_candidates_str = st.sidebar.text_input("Range candidates (%)", value="0.5, 1.0, 1.5, 2.0")
-levels_candidates_str = st.sidebar.text_input("Levels candidates", value="8, 10, 12, 14, 16")
-os_mult_candidates_str = st.sidebar.text_input("Order size mult candidates", value="0.6, 0.8, 1.0, 1.2")
+    range_candidates_str = st.sidebar.text_input("Range candidates (%)", value="0.5, 1.0, 1.5, 2.0")
+    levels_candidates_str = st.sidebar.text_input("Levels candidates", value="8, 10, 12, 14, 16")
+    os_mult_candidates_str = st.sidebar.text_input("Order size mult candidates", value="0.6, 0.8, 1.0, 1.2")
 
-cycle_tp_mode = st.sidebar.selectbox("Cycle TP enable candidates", ["Both", "Enabled only", "Disabled only"], index=0)
-if cycle_tp_mode == "Both":
-    cycle_tp_enable = [False, True]
-elif cycle_tp_mode == "Enabled only":
-    cycle_tp_enable = [True]
-else:
-    cycle_tp_enable = [False]
+    cycle_tp_mode = st.sidebar.selectbox("Cycle TP enable candidates", ["Both", "Enabled only", "Disabled only"], index=0)
+    if cycle_tp_mode == "Both":
+        cycle_tp_enable = [False, True]
+    elif cycle_tp_mode == "Enabled only":
+        cycle_tp_enable = [True]
+    else:
+        cycle_tp_enable = [False]
 
-cycle_tp_pcts_str = st.sidebar.text_input("Cycle TP % candidates", value="0.20, 0.35, 0.50")
+    cycle_tp_pcts_str = st.sidebar.text_input("Cycle TP % candidates", value="0.20, 0.35, 0.50")
 
-# Parsed candidate lists used by SearchSpace
-range_candidates = _parse_csv_floats(range_candidates_str, default=[1.0])
-levels_candidates = _parse_csv_ints(levels_candidates_str, default=[12])
-os_mult_candidates = _parse_csv_floats(os_mult_candidates_str, default=[1.0])
-cycle_tp_pcts = _parse_csv_floats(cycle_tp_pcts_str, default=[0.35])
+    # Parsed candidate lists used by SearchSpace
+    range_candidates = _parse_csv_floats(range_candidates_str, default=[1.0])
+    levels_candidates = _parse_csv_ints(levels_candidates_str, default=[12])
+    os_mult_candidates = _parse_csv_floats(os_mult_candidates_str, default=[1.0])
+    cycle_tp_pcts = _parse_csv_floats(cycle_tp_pcts_str, default=[0.35])
 
-st.sidebar.subheader("BB mean-reversion buy-filter (interpretable)")
-bb_mr_enable = st.sidebar.checkbox("Enable BB mean-reversion buy-filter", value=True,
-    help="Blocks new BUYs unless price/limit is sufficiently below the Bollinger mid-band (z-score threshold).")
-bb_mr_window = st.sidebar.slider("BB window", 10, 60, 20)
-bb_mr_z = st.sidebar.slider("Z-threshold (buy only if z <= -thr)", 0.0, 3.0, 0.75, step=0.05)
+    st.sidebar.subheader("BB mean-reversion buy-filter (interpretable)")
+    bb_mr_enable = st.sidebar.checkbox("Enable BB mean-reversion buy-filter", value=True,
+        help="Blocks new BUYs unless price/limit is sufficiently below the Bollinger mid-band (z-score threshold).")
+    bb_mr_window = st.sidebar.slider("BB window", 10, 60, 20)
+    bb_mr_z = st.sidebar.slider("Z-threshold (buy only if z <= -thr)", 0.0, 3.0, 0.75, step=0.05)
 
-st.sidebar.subheader("Inventory & trend guards (interpretable)")
+    st.sidebar.subheader("Inventory & trend guards (interpretable)")
 
-# Trend-guard (downtrend): block new BUYs in TREND-down regimes
-trend_guard_enable = st.sidebar.checkbox(
-    "Enable TREND downtrend guard (block BUYs)",
-    value=True,
-    help="When the effective regime is TREND and price has fallen over the lookback window beyond the threshold, new BUYs are blocked (SELLs still allowed)."
-, key="trainer_trend_guard_enable")
-trend_lookback = st.sidebar.slider("Trend lookback (candles)", 8, 200, 48, step=4, disabled=(not trend_guard_enable), key="trainer_trend_lookback")
-trend_down_thresh_pct = st.sidebar.slider("Downtrend threshold (%)", 0.1, 5.0, 1.0, step=0.1, disabled=(not trend_guard_enable), key="trainer_trend_down_thresh_pct")
+    # Trend-guard (downtrend): block new BUYs in TREND-down regimes
+    trend_guard_enable = st.sidebar.checkbox(
+        "Enable TREND downtrend guard (block BUYs)",
+        value=True,
+        help="When the effective regime is TREND and price has fallen over the lookback window beyond the threshold, new BUYs are blocked (SELLs still allowed)."
+    , key="trainer_trend_guard_enable")
+    trend_lookback = st.sidebar.slider("Trend lookback (candles)", 8, 200, 48, step=4, disabled=(not trend_guard_enable), key="trainer_trend_lookback")
+    trend_down_thresh_pct = st.sidebar.slider("Downtrend threshold (%)", 0.1, 5.0, 1.0, step=0.1, disabled=(not trend_guard_enable), key="trainer_trend_down_thresh_pct")
 
-# Time-stop per cycle: prevent long inventory hang by forcing more conservative exits after X hours
-st.sidebar.subheader("Inventory & trend guards (interpretable)")
+    # Time-stop per cycle: prevent long inventory hang by forcing more conservative exits after X hours
+    st.sidebar.subheader("Inventory & trend guards (interpretable)")
 
-# Trend-guard (downtrend): block new BUYs in TREND-down regimes
-trend_guard_enable = st.sidebar.checkbox(
-    "Enable TREND downtrend guard (block BUYs)",
-    value=True,
-    help="When the effective regime is TREND and price has fallen over the lookback window beyond the threshold, new BUYs are blocked (SELLs still allowed)."
-)
-trend_lookback = st.sidebar.slider("Trend lookback (candles)", 8, 200, 48, step=4, disabled=(not trend_guard_enable))
-trend_down_thresh_pct = st.sidebar.slider("Downtrend threshold (%)", 0.1, 5.0, 1.0, step=0.1, disabled=(not trend_guard_enable))
+    # Trend-guard (downtrend): block new BUYs in TREND-down regimes
+    trend_guard_enable = st.sidebar.checkbox(
+        "Enable TREND downtrend guard (block BUYs)",
+        value=True,
+        help="When the effective regime is TREND and price has fallen over the lookback window beyond the threshold, new BUYs are blocked (SELLs still allowed)."
+    )
+    trend_lookback = st.sidebar.slider("Trend lookback (candles)", 8, 200, 48, step=4, disabled=(not trend_guard_enable))
+    trend_down_thresh_pct = st.sidebar.slider("Downtrend threshold (%)", 0.1, 5.0, 1.0, step=0.1, disabled=(not trend_guard_enable))
 
-# Time-stop per cycle: prevent long inventory hang by forcing more conservative exits after X hours
-enable_time_stop = st.sidebar.checkbox(
-    "Enable time-stop per cycle",
-    value=True,
-    help="After a cycle has been open longer than X hours, apply an additional exit rule (e.g., net break-even) to reduce inventory hanging."
-, key="trainer_enable_time_stop")
-time_stop_hours = st.sidebar.slider("Time-stop age (hours)", 0.0, 72.0, 12.0, step=1.0, disabled=(not enable_time_stop), key="trainer_time_stop_hours")
-time_stop_mode = st.sidebar.selectbox(
-    "Time-stop mode",
-    ["BREAK_EVEN_NET", "DECAY_TO_TP", "REDUCE_TO_TP"],
-    index=0,
-    disabled=(not enable_time_stop),
-    help="BREAK_EVEN_NET: exit at net break-even (fees/slippage).\nDECAY_TO_TP: TP decays toward a floor as the cycle ages.\nREDUCE_TO_TP: after X hours use a lower fixed TP floor."
-, key="trainer_time_stop_mode")
-# Always define a floor value (used only for DECAY_TO_TP / REDUCE_TO_TP)
-time_stop_tp_floor_pct = 0.25
-if enable_time_stop and time_stop_mode != "BREAK_EVEN_NET":
-    time_stop_tp_floor_pct = st.sidebar.slider("Time-stop TP floor (%)", 0.0, 2.0, 0.25, step=0.05, key="trainer_time_stop_tp_floor_pct")
+    # Time-stop per cycle: prevent long inventory hang by forcing more conservative exits after X hours
+    enable_time_stop = st.sidebar.checkbox(
+        "Enable time-stop per cycle",
+        value=True,
+        help="After a cycle has been open longer than X hours, apply an additional exit rule (e.g., net break-even) to reduce inventory hanging."
+    , key="trainer_enable_time_stop")
+    time_stop_hours = st.sidebar.slider("Time-stop age (hours)", 0.0, 72.0, 12.0, step=1.0, disabled=(not enable_time_stop), key="trainer_time_stop_hours")
+    time_stop_mode = st.sidebar.selectbox(
+        "Time-stop mode",
+        ["BREAK_EVEN_NET", "DECAY_TO_TP", "REDUCE_TO_TP"],
+        index=0,
+        disabled=(not enable_time_stop),
+        help="BREAK_EVEN_NET: exit at net break-even (fees/slippage).\nDECAY_TO_TP: TP decays toward a floor as the cycle ages.\nREDUCE_TO_TP: after X hours use a lower fixed TP floor."
+    , key="trainer_time_stop_mode")
+    # Always define a floor value (used only for DECAY_TO_TP / REDUCE_TO_TP)
+    time_stop_tp_floor_pct = 0.25
+    if enable_time_stop and time_stop_mode != "BREAK_EVEN_NET":
+        time_stop_tp_floor_pct = st.sidebar.slider("Time-stop TP floor (%)", 0.0, 2.0, 0.25, step=0.05, key="trainer_time_stop_tp_floor_pct")
 
-st.sidebar.subheader("Regime hysteresis (stability)")
-confirm_n = st.sidebar.slider(
-    "Confirmations required",
-    min_value=1,
-    max_value=10,
-    value=3,
-    step=1,
-    key="trainer_confirm_n",
-    help="Effective regime changes only after N identical classifications (reduces churn).",
-)
-cooldown_candles = st.sidebar.slider(
-    "Cooldown (candles)",
-    min_value=0,
-    max_value=500,
-    value=35,
-    step=1,
-    key="trainer_cooldown_candles",
-    help="Minimum candles between regime changes (additional hysteresis).",
-)
+    st.sidebar.subheader("Regime hysteresis (stability)")
+    confirm_n = st.sidebar.slider(
+        "Confirmations required",
+        min_value=1,
+        max_value=10,
+        value=3,
+        step=1,
+        key="trainer_confirm_n",
+        help="Effective regime changes only after N identical classifications (reduces churn).",
+    )
+    cooldown_candles = st.sidebar.slider(
+        "Cooldown (candles)",
+        min_value=0,
+        max_value=500,
+        value=35,
+        step=1,
+        key="trainer_cooldown_candles",
+        help="Minimum candles between regime changes (additional hysteresis).",
+    )
 
-rng_seed = st.sidebar.number_input("Random seed", min_value=0, value=1337, step=1)
+    rng_seed = st.sidebar.number_input("Random seed", min_value=0, value=1337, step=1)
 
-st.sidebar.subheader("Best-overall selection")
-global_best = st.sidebar.checkbox(
-    "Global best across symbols",
-    value=False,
-    help="Als dit aanstaat, zoeken we één gedeelde regime-profielset die gemiddeld over alle geselecteerde symbols + folds het beste scoort. "
-         "Als dit uitstaat, optimaliseren we per symbol apart (default).",
-)
-restarts = st.sidebar.slider(
-    "Restarts (profile sets to try)",
-    min_value=1,
-    max_value=20,
-    value=6,
-    step=1,
-    help="We trainen meerdere (gesamplede) profielsets met verschillende seeds en kiezen de beste op gemiddelde test-score over folds.",
-)
-min_test_trades_avg = st.sidebar.slider(
-    "Min avg test trades (eligibility)",
-    min_value=0,
-    max_value=200,
-    value=10,
-    step=1,
-    help="Voorkomt dat een 'best' profiel wint door nauwelijks te traden.",
-)
-max_test_dd_cap_pct = st.sidebar.slider(
-    "Max test drawdown cap (%)",
-    min_value=0.5,
-    max_value=50.0,
-    value=15.0,
-    step=0.5,
-    help="Alleen profielsets waarvan de worst-case test drawdown onder deze cap blijft, zijn eligible.",
-)
+    st.sidebar.subheader("Best-overall selection")
+    global_best = st.sidebar.checkbox(
+        "Global best across symbols",
+        value=False,
+        help="Als dit aanstaat, zoeken we één gedeelde regime-profielset die gemiddeld over alle geselecteerde symbols + folds het beste scoort. "
+             "Als dit uitstaat, optimaliseren we per symbol apart (default).",
+    )
+    restarts = st.sidebar.slider(
+        "Restarts (profile sets to try)",
+        min_value=1,
+        max_value=20,
+        value=6,
+        step=1,
+        help="We trainen meerdere (gesamplede) profielsets met verschillende seeds en kiezen de beste op gemiddelde test-score over folds.",
+    )
+    min_test_trades_avg = st.sidebar.slider(
+        "Min avg test trades (eligibility)",
+        min_value=0,
+        max_value=200,
+        value=10,
+        step=1,
+        help="Voorkomt dat een 'best' profiel wint door nauwelijks te traden.",
+    )
+    max_test_dd_cap_pct = st.sidebar.slider(
+        "Max test drawdown cap (%)",
+        min_value=0.5,
+        max_value=50.0,
+        value=15.0,
+        step=0.5,
+        help="Alleen profielsets waarvan de worst-case test drawdown onder deze cap blijft, zijn eligible.",
+    )
 
-# Additional promotion-quality gates (recommended)
-require_positive_test_pnl = st.sidebar.checkbox(
-    "Gate: require test PnL avg > 0",
-    value=True,
-    help="Reject profile sets that are net negative out-of-sample (after fees/slippage)."
-)
-min_worst_fold_test_pnl = st.sidebar.number_input(
-    "Gate: worst fold test PnL (>=)",
-    value=0.0,
-    step=0.1,
-    help="Reject if any fold has test PnL below this threshold."
-)
-min_test_trades_per_fold = st.sidebar.slider(
-    "Gate: min test trades per fold",
-    min_value=0,
-    max_value=500,
-    value=20,
-    step=5,
-    help="Reject if any test fold has fewer trades than this threshold."
-)
-use_median_tiebreak = st.sidebar.checkbox(
-    "Use median test score as tiebreak",
-    value=True,
-)
+    # Additional promotion-quality gates (recommended)
+    require_positive_test_pnl = st.sidebar.checkbox(
+        "Gate: require test PnL avg > 0",
+        value=True,
+        help="Reject profile sets that are net negative out-of-sample (after fees/slippage)."
+    )
+    min_worst_fold_test_pnl = st.sidebar.number_input(
+        "Gate: worst fold test PnL (>=)",
+        value=0.0,
+        step=0.1,
+        help="Reject if any fold has test PnL below this threshold."
+    )
+    min_test_trades_per_fold = st.sidebar.slider(
+        "Gate: min test trades per fold",
+        min_value=0,
+        max_value=500,
+        value=20,
+        step=5,
+        help="Reject if any test fold has fewer trades than this threshold."
+    )
+    use_median_tiebreak = st.sidebar.checkbox(
+        "Use median test score as tiebreak",
+        value=True,
+    )
 
 
 
-st.sidebar.subheader("Scoring (optimizer objective)")
-score_mode = st.sidebar.selectbox(
-    "Score mode",
-    ["PnL - λ·DD", "PnL / DD"],
-    index=0,
-    key="trainer_score_mode",
-    help="PnL - λ·DD: linear penalty on drawdown. PnL / DD: risk-adjusted ratio (higher is better)."
-)
-lambda_dd = st.sidebar.slider(
-    "λ (drawdown penalty)",
-    min_value=0.0,
-    max_value=500.0,
-    value=100.0,
-    step=5.0,
-    key="trainer_lambda_dd",
-    help="Used only for PnL - λ·DD mode."
-)
+    st.sidebar.subheader("Scoring (optimizer objective)")
+    score_mode = st.sidebar.selectbox(
+        "Score mode",
+        ["PnL - λ·DD", "PnL / DD"],
+        index=0,
+        key="trainer_score_mode",
+        help="PnL - λ·DD: linear penalty on drawdown. PnL / DD: risk-adjusted ratio (higher is better)."
+    )
+    lambda_dd = st.sidebar.slider(
+        "λ (drawdown penalty)",
+        min_value=0.0,
+        max_value=500.0,
+        value=100.0,
+        step=5.0,
+        key="trainer_lambda_dd",
+        help="Used only for PnL - λ·DD mode."
+    )
 
-st.sidebar.subheader("Objective weights (scoring)")
-dd_penalty = st.sidebar.slider(
-    "Drawdown penalty weight",
-    min_value=0.0,
-    max_value=500.0,
-    value=100.0,
-    step=5.0,
-    key="trainer_dd_penalty",
-    help="Higher penalizes drawdowns more strongly in the optimizer score."
-)
-trade_penalty = st.sidebar.slider(
-    "Low-trade penalty weight",
-    min_value=0.0,
-    max_value=500.0,
-    value=50.0,
-    step=5.0,
-    key="trainer_trade_penalty",
-    help="Higher penalizes strategies with too few trades (helps avoid overfitting via inactivity)."
-)
+    st.sidebar.subheader("Objective weights (scoring)")
+    dd_penalty = st.sidebar.slider(
+        "Drawdown penalty weight",
+        min_value=0.0,
+        max_value=500.0,
+        value=100.0,
+        step=5.0,
+        key="trainer_dd_penalty",
+        help="Higher penalizes drawdowns more strongly in the optimizer score."
+    )
+    trade_penalty = st.sidebar.slider(
+        "Low-trade penalty weight",
+        min_value=0.0,
+        max_value=500.0,
+        value=50.0,
+        step=5.0,
+        key="trainer_trade_penalty",
+        help="Higher penalizes strategies with too few trades (helps avoid overfitting via inactivity)."
+    )
 
-st.sidebar.subheader("Optimizer budget")
-max_evals_per_regime = st.sidebar.number_input(
-    "Max evals per regime",
-    min_value=10,
-    max_value=5000,
-    value=250,
-    step=10,
-    key="trainer_max_evals_per_regime",
-    help="Limits the number of candidate evaluations per regime (keeps training bounded)."
-)
+    st.sidebar.subheader("Optimizer budget")
+    max_evals_per_regime = st.sidebar.number_input(
+        "Max evals per regime",
+        min_value=10,
+        max_value=5000,
+        value=250,
+        step=10,
+        key="trainer_max_evals_per_regime",
+        help="Limits the number of candidate evaluations per regime (keeps training bounded)."
+    )
 
-run = st.sidebar.button("▶ Train (multi-fold WF)", width="stretch")
+    run = st.form_submit_button("▶ Train (multi-fold WF)", use_container_width=True)
 
 if "trained_profiles" not in st.session_state:
     st.session_state.trained_profiles = None
@@ -1056,9 +1057,14 @@ if run:
     meta["gates_passed"] = (len(gate_fail) == 0)
     meta["gates_failed"] = gate_fail
 
+    # Persist trainer tables into bundle meta so results remain visible after session reset.
+    meta["trainer_report_rows"] = report_rows
+    meta["trainer_fold_rows"] = fold_rows
+
     bundle = make_bundle(trained, meta)
     default_name = f"bundle_{meta['mode'].lower()}_{timeframe}_{pd.Timestamp.utcnow().strftime('%Y%m%d_%H%M%S')}"
     saved_path = save_bundle(bundle, store_dir=store_dir, name=default_name)
+    st.session_state.last_bundle_path = saved_path
 
     st.success(f"Saved profile bundle: {saved_path}")
     st.download_button(
