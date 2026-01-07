@@ -1546,6 +1546,10 @@ with st.expander("Correlation matrix (rolling)", expanded=False):
 # ----------------------------
 # Tabs per pair
 # ----------------------------
+if not dfs:
+    st.error("No market data loaded for the selected pairs/timeframe. Check Bitvavo availability / rate limits, then try again.")
+    st.stop()
+
 tabs = st.tabs(list(dfs.keys()))
 for i, sym in enumerate(dfs.keys()):
     with tabs[i]:
