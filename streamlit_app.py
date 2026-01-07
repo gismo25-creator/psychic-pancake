@@ -1491,7 +1491,12 @@ with st.expander("Drawdown history (last points)", expanded=False):
 if st.session_state.asset_halt:
     st.warning(f"Asset halt active (no new buys): {', '.join(sorted(st.session_state.asset_halt))}")
 
-summary_df = pd.DataFrame([{"symbol": k, **v} for k, v in pair_summaries.items()]).sort_values("symbol")
+summary_df = pd.DataFrame([{"symbol": k, **v} for k, v in pair_summaries.items()])
+if (not summary_df.empty) and ("symbol" in summary_df.columns):
+    summary_df = summary_df.sort_values("symbol")
+else:
+    # Defensive: avoid KeyError on empty/partial frames (e.g., if no pairs loaded successfully).
+    summary_df = summary_df.copy()
 if not summary_df.empty:
     # Defensive: ensure optional ML columns exist (older session states / partial data)
     for col in ["regime_dur_min", "vol_cluster_acf1", "hit_rate", "win_rate", "cur_streak", "max_win_streak", "max_loss_streak", "dyn_os_mult"]:
