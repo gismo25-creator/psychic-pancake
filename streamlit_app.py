@@ -464,6 +464,7 @@ def default_cfg(sym: str):
         "time_stop_hours": 48.0,
         "time_stop_mode": "DECAY_TO_TP",
         "time_stop_floor_tp_pct": 0.20,
+        "time_stop_tp_floor_pct": 0.20,  # alias (used by trainer/backtest)
         "trend_guard_enable": True,
         "trend_guard_lookback": 30,
         "trend_guard_thr_pct": 0.0,
@@ -615,7 +616,7 @@ for sym in symbols:
         )
         cfg["time_stop_floor_tp_pct"] = st.slider(
             f"{sym} Time-stop TP floor (%)", 0.0, 3.0, float(cfg.get("time_stop_floor_tp_pct", 0.20)), step=0.05,
-            disabled=(not bool(cfg.get("enable_time_stop", True))) or str(cfg.get("time_stop_mode","")).upper()=="BREAK_EVEN_NET",
+            disabled=(not bool(cfg.get("enable_time_stop", True))),
             key=f"{sym}_ts_floor"
         )
 
@@ -1345,6 +1346,7 @@ for sym, df in dfs.items():
     eng.time_stop_hours = float(cfg.get("time_stop_hours", 48.0))
     eng.time_stop_mode = str(cfg.get("time_stop_mode", "DECAY_TO_TP")).upper()
     eng.time_stop_floor_tp_pct = float(cfg.get("time_stop_floor_tp_pct", 0.20))
+    eng.time_stop_tp_floor_pct = float(cfg.get("time_stop_tp_floor_pct", cfg.get("time_stop_floor_tp_pct", 0.20)))
 
     base = sym.split("/")[0]
     trend_block = False

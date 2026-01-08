@@ -143,10 +143,15 @@ with st.sidebar.form("trainer_cfg_form"):
         help="BREAK_EVEN_NET: exit at net break-even (fees/slippage).\nDECAY_TO_TP: TP decays toward a floor as the cycle ages.\nREDUCE_TO_TP: after X hours use a lower fixed TP floor."
     , key="trainer_time_stop_mode")
     # Always define a floor value (used only for DECAY_TO_TP / REDUCE_TO_TP)
-    time_stop_tp_floor_pct = 0.25
-    if enable_time_stop and time_stop_mode != "BREAK_EVEN_NET":
-        time_stop_tp_floor_pct = st.sidebar.slider("Time-stop TP floor (%)", 0.0, 2.0, 0.25, step=0.05, key="trainer_time_stop_tp_floor_pct")
-
+    # Time-stop TP floor: minimum profit target (in % from entry) used when the time-stop triggers.
+    # In BREAK_EVEN_NET, this becomes max(net break-even, entry*(1+floor)).
+    time_stop_tp_floor_pct = st.sidebar.slider(
+        "Time-stop TP floor (%)",
+        0.0, 2.0, 0.25, step=0.05,
+        key="trainer_time_stop_tp_floor_pct",
+        disabled=(not enable_time_stop),
+        help="Used when time-stop triggers. In BREAK_EVEN_NET: exit at max(net break-even, entry*(1+floor)). In DECAY/REDUCE: floor for reduced TP.",
+    )
     st.sidebar.subheader("Regime hysteresis (stability)")
     confirm_n = st.sidebar.slider(
         "Confirmations required",
