@@ -193,7 +193,6 @@ def run_backtest(
         eng.time_stop_hours = float((profile or {}).get("time_stop_hours", cfg.get("time_stop_hours", 48.0)))
         eng.time_stop_mode = str((profile or {}).get("time_stop_mode", cfg.get("time_stop_mode", "DECAY_TO_TP"))).upper()
         eng.time_stop_floor_tp_pct = float((profile or {}).get("time_stop_floor_tp_pct", cfg.get("time_stop_floor_tp_pct", 0.20)))
-        eng.time_stop_tp_floor_pct = float((profile or {}).get("time_stop_tp_floor_pct", cfg.get("time_stop_tp_floor_pct", eng.time_stop_floor_tp_pct)))
 
         # Optional rebuild on regime change: close position and reset grid/cycles
         if rebuild_on_regime_change:

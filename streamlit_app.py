@@ -464,7 +464,6 @@ def default_cfg(sym: str):
         "time_stop_hours": 48.0,
         "time_stop_mode": "DECAY_TO_TP",
         "time_stop_floor_tp_pct": 0.20,
-        "time_stop_tp_floor_pct": 0.20,  # alias (used by trainer/backtest)
         "trend_guard_enable": True,
         "trend_guard_lookback": 30,
         "trend_guard_thr_pct": 0.0,
@@ -616,7 +615,7 @@ for sym in symbols:
         )
         cfg["time_stop_floor_tp_pct"] = st.slider(
             f"{sym} Time-stop TP floor (%)", 0.0, 3.0, float(cfg.get("time_stop_floor_tp_pct", 0.20)), step=0.05,
-            disabled=(not bool(cfg.get("enable_time_stop", True))),
+            disabled=(not bool(cfg.get("enable_time_stop", True))) or str(cfg.get("time_stop_mode","")).upper()=="BREAK_EVEN_NET",
             key=f"{sym}_ts_floor"
         )
 
@@ -716,6 +715,9 @@ if "asset_halt" not in st.session_state:
     st.session_state.asset_halt = set()  # base assets halted due to stop
 if "pair_paused" not in st.session_state:
     st.session_state.pair_paused = set()  # symbols paused manually (no trading)
+if "last_bar_ts" not in st.session_state:
+    st.session_state.last_bar_ts = {}  # symbol -> last processed closed bar timestamp
+
 
 # --- Interpretable execution log (per pair)
 if "decision_log" not in st.session_state:
@@ -1315,11 +1317,51 @@ for sym, df in dfs.items():
         eff_levels = None
         grid = generate_fibonacci_grid(lower, upper)
 
-    sig = (sym, timeframe, cfg["grid_type"], round(lower, 2), round(upper, 2), len(grid), float(cfg["order_size"]), bool(cfg.get("enable_cycle_tp", False)), float(cfg.get("cycle_tp_pct", 0.35)))
-    if sym not in st.session_state.engines or getattr(st.session_state.engines[sym], "_signature", None) != sig:
-        eng = GridEngine(sym, grid, eff_order_size)
-        eng._signature = sig
+    # --- Engine/grid reuse: keep grid fixed and only rebuild when config/regime changes or price leaves bounds.
+    cfg_sig = (
+        sym, timeframe, cfg['grid_type'],
+        float(cfg.get('base_range_pct', 1.0)),
+        int(cfg.get('base_levels', 10)) if cfg['grid_type'] == 'Linear' else -1,
+        float(cfg.get('order_size', 0.0)),
+        bool(cfg.get('dynamic_spacing', True)),
+        float(cfg.get('k_range', 1.5)),
+        float(cfg.get('k_levels', 0.7)),
+        str(eff_regime),
+    )
+    need_rebuild = False
+    rebuild_reason = 'OK'
+    if sym not in st.session_state.engines:
+        need_rebuild = True
+        rebuild_reason = 'INIT'
+    else:
+        eng_existing = st.session_state.engines[sym]
+        prev_sig = getattr(eng_existing, '_cfg_sig', None)
+        if prev_sig != cfg_sig:
+            need_rebuild = True
+            rebuild_reason = 'CFG_OR_REGIME_CHANGE'
+        else:
+            bounds = getattr(eng_existing, '_bounds', None)
+            if bounds and isinstance(bounds, (tuple, list)) and len(bounds) == 2:
+                lo_b, hi_b = float(bounds[0]), float(bounds[1])
+                span = max(hi_b - lo_b, 1e-9)
+                buf = 0.10 * span  # 10% buffer
+                if float(price) < (lo_b - buf) or float(price) > (hi_b + buf):
+                    need_rebuild = True
+                    rebuild_reason = 'PRICE_OUTSIDE_BOUNDS'
+            else:
+                need_rebuild = True
+                rebuild_reason = 'MISSING_BOUNDS'
+
+    if need_rebuild:
+        eng = GridEngine(sym, grid, cfg['order_size'])
+        eng._cfg_sig = cfg_sig
+        eng._bounds = (lower, upper)
+        eng._last_rebuild_reason = rebuild_reason
         st.session_state.engines[sym] = eng
+    else:
+        # keep existing grid; keep order_size updated if you tweak it live
+        eng_existing = st.session_state.engines[sym]
+        eng_existing.order_size = float(cfg.get('order_size', eng_existing.order_size))
 
     eng: GridEngine = st.session_state.engines[sym]
     # --- Range efficiency (hit-rate) ---
@@ -1346,7 +1388,6 @@ for sym, df in dfs.items():
     eng.time_stop_hours = float(cfg.get("time_stop_hours", 48.0))
     eng.time_stop_mode = str(cfg.get("time_stop_mode", "DECAY_TO_TP")).upper()
     eng.time_stop_floor_tp_pct = float(cfg.get("time_stop_floor_tp_pct", 0.20))
-    eng.time_stop_tp_floor_pct = float(cfg.get("time_stop_tp_floor_pct", cfg.get("time_stop_floor_tp_pct", 0.20)))
 
     base = sym.split("/")[0]
     trend_block = False
@@ -1429,6 +1470,20 @@ for sym, df in dfs.items():
     })
 
     if st.session_state.trading_enabled and (not pair_is_paused):
+        # --- Intrabar bar-cross processing (captures level crossings that occur between refresh ticks)
+        # We process the last CLOSED candle once per bar. This avoids missing crossings when using slower refresh intervals.
+        if len(df) >= 3:
+            closed = df.iloc[-2]  # penultimate candle is closed
+            bar_ts = closed["timestamp"]
+            prev_bar_ts = st.session_state.last_bar_ts.get(sym)
+            if (prev_bar_ts is None) or (bar_ts > prev_bar_ts):
+                st.session_state.last_bar_ts[sym] = bar_ts
+                o = float(closed["open"]); h = float(closed["high"]); l = float(closed["low"]); c = float(closed["close"])
+                # Approximate intrabar path: open -> low -> high -> close (simple, deterministic).
+                for px in (o, l, h, c):
+                    if st.session_state.trading_enabled and (not pair_is_paused):
+                        eng.check_price(px, trader, bar_ts, allow_buys=allow_buys, buy_guard=buy_guard)
+        
         eng.check_price(price, trader, ts, allow_buys=allow_buys, buy_guard=buy_guard)
 
     # --- Range efficiency & streaks ---
@@ -1580,76 +1635,22 @@ for i, sym in enumerate(dfs.keys()):
             pair_state = "PAUSED" if is_paused else "ACTIVE"
             global_state = "RUNNING" if st.session_state.trading_enabled else "STOPPED"
             st.caption(f"Pair status: {pair_state}  |  Global trading: {global_state}")
-
-        # --- Explain panel (interpretable, non-black-box)
-        with st.expander("Execution explain (why buys/sells happen or are blocked)", expanded=False):
-            base_cap = per_asset_caps.get(base)
-            pos_amt = float(trader.positions.get(base, 0.0))
-            avg_entry = trader.avg_entry_price(base)
-            exposure = pos_amt * float(price)
-            cap_remaining = (float(base_cap) - exposure) if (base_cap is not None) else None
-
-            st.write(f"**Regime:** raw={pair_summaries.get(sym, {}).get('raw_regime')} | effective={pair_summaries.get(sym, {}).get('eff_regime')}")
-            st.write(f"**Trading enabled:** {st.session_state.trading_enabled} | **Pair paused:** {is_paused} | **Portfolio stop:** {st.session_state.portfolio_stop_active}")
-            st.write(f"**Allow buys (this tick):** {pair_summaries.get(sym, {}).get('allow_buys', True)}")
-            if base_cap is not None:
-                st.write(f"**Exposure cap:** {float(base_cap):.2f} EUR | **Current exposure:** {exposure:.2f} EUR | **Remaining:** {cap_remaining:.2f} EUR")
-            st.write(f"**Position:** {pos_amt:.6f} {base} | **Avg entry:** {avg_entry:.2f} EUR" if avg_entry else f"**Position:** {pos_amt:.6f} {base}")
-
-            buys = sorted(list(getattr(eng, "active_buys", [])), reverse=True)
-            sells = sorted(list(getattr(eng, "active_sells", [])))
-            st.write(f"**Active buy levels:** {len(buys)} | **Active sell levels:** {len(sells)} | **Open cycles:** {len(getattr(eng, 'open_cycles', {}))}")
-
-            if buys:
-                next_buy = min([b for b in buys if b >= price], default=None)
-                st.write(f"Next BUY level (limit): {next_buy:.2f}" if next_buy else "No BUY levels above/at current price.")
-            if sells:
-                next_sell = min([s for s in sells if s >= price], default=None)
-                st.write(f"Next SELL level (limit): {next_sell:.2f}" if next_sell else "No SELL levels above current price (some may be eligible already).")
-
-            if bool(getattr(eng, "enable_cycle_tp", False)) and float(getattr(eng, "cycle_tp_pct", 0.0)) > 0.0 and getattr(eng, "open_cycles", {}):
-                tp_mult = 1.0 + (float(getattr(eng, "cycle_tp_pct", 0.0)) / 100.0)
-                tp_prices = [float(oc.buy_price) * tp_mult for oc in eng.open_cycles.values()]
-                nearest_tp = min([tp for tp in tp_prices if tp >= price], default=None)
-                st.write(f"**Cycle TP enabled:** {float(getattr(eng,'cycle_tp_pct')):.2f}% | nearest TP: {nearest_tp:.2f}" if nearest_tp else f"**Cycle TP enabled:** {float(getattr(eng,'cycle_tp_pct')):.2f}% | some TP(s) may be eligible now.")
-
-        if show_decision_log:
-            dlog = st.session_state.decision_log.get(sym)
-            if dlog:
-                ddf = pd.DataFrame(list(dlog)).tail(int(decision_log_rows))
-                if "price" in ddf.columns:
-                    ddf["price"] = ddf["price"].astype(float).round(2)
-                if "pos_base" in ddf.columns:
-                    ddf["pos_base"] = ddf["pos_base"].astype(float).round(6)
-                if "exposure_eur" in ddf.columns:
-                    ddf["exposure_eur"] = ddf["exposure_eur"].astype(float).round(2)
-                if "cap_remaining_eur" in ddf.columns:
-                    ddf["cap_remaining_eur"] = ddf["cap_remaining_eur"].astype(float).round(2)
-                if "corr_max" in ddf.columns:
-                    ddf["corr_max"] = ddf["corr_max"].astype(float).round(3)
-                st.dataframe(ddf, width="stretch", height=240)
-            else:
-                st.caption("No decision log rows yet for this pair.")
-
-        # --- Range efficiency & streaks quick view ---
-        hr_pct = float(pair_summaries.get(sym, {}).get("hit_rate", float("nan"))) * 100.0
-        wr_pct = float(pair_summaries.get(sym, {}).get("win_rate", float("nan"))) * 100.0
-        st1, st2, st3 = st.columns(3)
-        st1.metric("Hit-rate", f"{hr_pct:.1f}%" if not math.isnan(hr_pct) else "—")
-        st2.metric("Win-rate", f"{wr_pct:.1f}%" if not math.isnan(wr_pct) else "—")
-        st3.metric("Streak", str(pair_summaries.get(sym, {}).get("cur_streak", "—")))
-        sug = st.session_state.opt_suggestions.get(sym)
-        if sug:
-            rp = float(sug.get("range_pct", float("nan")))
-            if not math.isnan(rp):
-                lv = sug.get("levels", None)
-                lv_txt = str(lv) if lv is not None else "—"
-                hr_s = float(sug.get("hit_rate", float("nan")))
-                st.caption(
-                    f"Suggested grid params: range ±{rp:.2f}% | levels {lv_txt} | hit {hr_s*100.0:.1f}%"
-                )
-
-
+            with st.expander("Debug (why no trades?)", expanded=False):
+                grid_sorted = sorted([float(x) for x in grid])
+                p = float(price)
+                next_buy = max([x for x in grid_sorted if x < p], default=None)
+                next_sell = min([x for x in grid_sorted if x > p], default=None)
+                gmin = (min(grid_sorted) if grid_sorted else None)
+                gmax = (max(grid_sorted) if grid_sorted else None)
+                gstep = (grid_sorted[1] - grid_sorted[0] if len(grid_sorted) >= 2 else None)
+                bounds = getattr(eng, "_bounds", None)
+                st.write("price:", p)
+                st.write("grid_min/max:", gmin, gmax, "grid_step:", gstep)
+                st.write("next_buy(<price):", next_buy, "next_sell(>price):", next_sell)
+                st.write("bounds:", bounds, "last_rebuild_reason:", getattr(eng, "_last_rebuild_reason", "OK"))
+                st.write("allow_buys:", bool(allow_buys), "pair_paused:", bool(is_paused), "portfolio_stop:", bool(st.session_state.portfolio_stop_active), "asset_halt:", (base in st.session_state.asset_halt))
+                st.write("trades_logged:", len(getattr(eng, "trades", [])), "open_cycles:", len(getattr(eng, "open_cycles", dict())))
+                st.write("active_buys:", len(getattr(eng, "active_buys", set())), "active_sells:", len(getattr(eng, "active_sells", set())))
 
         fig = go.Figure(go.Candlestick(
             x=df["timestamp"], open=df["open"], high=df["high"], low=df["low"], close=df["close"], name="Price"

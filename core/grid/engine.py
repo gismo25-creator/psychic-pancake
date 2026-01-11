@@ -240,7 +240,7 @@ class GridEngine:
         if bool(getattr(self, "enable_time_stop", False)) and float(getattr(self, "time_stop_hours", 0.0)) > 0.0:
             max_h = float(getattr(self, "time_stop_hours", 0.0))
             mode = str(getattr(self, "time_stop_mode", "BREAK_EVEN_NET")).upper()
-            floor_tp = float(getattr(self, "time_stop_tp_floor_pct", getattr(self, "time_stop_floor_tp_pct", 0.0)))
+            floor_tp = float(getattr(self, "time_stop_floor_tp_pct", 0.0))
 
             for buy_level, oc in list(self.open_cycles.items()):
                 age_h = self._age_hours(ts, oc.buy_time)
@@ -255,8 +255,7 @@ class GridEngine:
                 elif mode == "REDUCE_TO_TP":
                     target_price = float(oc.buy_price) * (1.0 + floor_tp / 100.0)
                 else:
-                    # BREAK_EVEN_NET: use net break-even, optionally with an extra TP floor (safety margin).
-                    target_price = float(oc.buy_price) * (1.0 + (floor_tp / 100.0)) if floor_tp > 0.0 else float(oc.buy_price)
+                    target_price = float(oc.buy_price)
 
                 be_limit = self._net_breakeven_limit(trader, oc)
                 exit_price = max(float(target_price), float(be_limit))

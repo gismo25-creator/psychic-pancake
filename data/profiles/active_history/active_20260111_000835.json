@@ -1,0 +1,165 @@
+{
+  "schema_version": 1,
+  "created_at": "2026-01-10T22:00:05.109535+00:00",
+  "meta": {
+    "mode": "PER_SYMBOL",
+    "symbols": [
+      "XRP/EUR"
+    ],
+    "timeframe": "15m",
+    "lookback_days": 205,
+    "folds": 4,
+    "test_window_days": 14,
+    "step_days": 14,
+    "min_train_days": 92,
+    "max_evals_per_regime": 150,
+    "restarts": 6,
+    "rng_seed": 1337,
+    "fees": {
+      "maker": 0.001,
+      "taker": 0.0025,
+      "slippage": 9.999999999999996e-05,
+      "mode": "maker"
+    },
+    "git_commit": "",
+    "data_hashes": {},
+    "gates": {
+      "require_positive_test_pnl": true,
+      "min_worst_fold_test_pnl": 0.0,
+      "min_test_trades_per_fold": 20,
+      "min_test_trades_avg": 10,
+      "max_test_dd_cap_pct": 2.0
+    },
+    "gates_passed": false,
+    "gates_failed": [
+      "NEG_TEST_PNL_AVG",
+      "MIN_TRADES_AVG",
+      "WORST_FOLD_PNL",
+      "MIN_TRADES_PER_FOLD"
+    ],
+    "trainer_report_rows": [
+      {
+        "symbol": "XRP/EUR",
+        "status": "OK",
+        "train_total_pnl": -55.030026901275505,
+        "train_max_dd_pct": 6.226349721397106,
+        "train_win_rate_pct": 100.0,
+        "train_trades": 52,
+        "bb_mr_enable": true,
+        "bb_mr_window": 20,
+        "bb_mr_z": 0.75,
+        "trend_guard_enable": true,
+        "trend_lookback": 48,
+        "trend_down_thresh_pct": 1.0,
+        "enable_time_stop": true,
+        "time_stop_hours": 12.0,
+        "time_stop_mode": "BREAK_EVEN_NET",
+        "time_stop_tp_floor_pct": 0.25,
+        "test_score_avg": -11.288934261104014,
+        "test_score_med": -11.039702220753103,
+        "test_total_pnl_avg": -9.099181301477415,
+        "test_max_dd_pct_avg": 2.1897529596265985,
+        "folds_used": 4
+      }
+    ],
+    "trainer_fold_rows": [
+      {
+        "symbol": "XRP/EUR",
+        "fold": 1,
+        "train_start": "2025-08-15 21:00:00+00:00",
+        "train_end": "2025-11-15 21:00:00+00:00",
+        "test_start": "2025-11-15 21:00:00+00:00",
+        "test_end": "2025-11-29 21:00:00+00:00",
+        "test_total_pnl": 0.012403992405211284,
+        "test_max_dd_pct": 3.4214265803438866,
+        "test_score": -3.4090225879386753,
+        "test_trades": 140,
+        "test_win_rate_pct": 100.0
+      },
+      {
+        "symbol": "XRP/EUR",
+        "fold": 2,
+        "train_start": "2025-08-29 21:00:00+00:00",
+        "train_end": "2025-11-29 21:00:00+00:00",
+        "test_start": "2025-11-29 21:00:00+00:00",
+        "test_end": "2025-12-13 21:00:00+00:00",
+        "test_total_pnl": -21.874340405590942,
+        "test_max_dd_pct": 2.6103016745105867,
+        "test_score": -24.48464208010153,
+        "test_trades": 30,
+        "test_win_rate_pct": 100.0
+      },
+      {
+        "symbol": "XRP/EUR",
+        "fold": 3,
+        "train_start": "2025-09-12 21:00:00+00:00",
+        "train_end": "2025-12-13 21:00:00+00:00",
+        "test_start": "2025-12-13 21:00:00+00:00",
+        "test_end": "2025-12-27 21:00:00+00:00",
+        "test_total_pnl": -16.1801959862114,
+        "test_max_dd_pct": 2.4901858673561272,
+        "test_score": -18.67038185356753,
+        "test_trades": 18,
+        "test_win_rate_pct": 100.0
+      },
+      {
+        "symbol": "XRP/EUR",
+        "fold": 4,
+        "train_start": "2025-09-26 21:00:00+00:00",
+        "train_end": "2025-12-27 21:00:00+00:00",
+        "test_start": "2025-12-27 21:00:00+00:00",
+        "test_end": "2026-01-10 21:00:00+00:00",
+        "test_total_pnl": 1.6454071934874719,
+        "test_max_dd_pct": 0.2370977162957956,
+        "test_score": 1.4083094771916762,
+        "test_trades": 72,
+        "test_win_rate_pct": 100.0
+      }
+    ],
+    "sanity_passed": true,
+    "sanity_summary": {
+      "bundle_id": "2026-01-10T22:00:05.109535+00:00::data\\profiles\\bundle_per_symbol_15m_20260110_220005.json",
+      "require_no_errors": true,
+      "n_symbols": 0,
+      "fails": 0,
+      "errors": 0
+    },
+    "sanity_rows": []
+  },
+  "profiles": {
+    "XRP/EUR": {
+      "use_regime_profiles": true,
+      "regime_profile_rebuild": false,
+      "regime_profiles": {
+        "RANGE": {
+          "range_pct": 0.5,
+          "levels": 10,
+          "order_size_mult": 0.6,
+          "cycle_tp_enable": true,
+          "cycle_tp_pct": 1.0
+        },
+        "TREND": {
+          "range_pct": 1.5,
+          "levels": 14,
+          "order_size_mult": 1.2,
+          "cycle_tp_enable": true,
+          "cycle_tp_pct": 1.2
+        },
+        "CHAOS": {
+          "range_pct": 3.0,
+          "levels": 8,
+          "order_size_mult": 0.6,
+          "cycle_tp_enable": true,
+          "cycle_tp_pct": 0.5
+        },
+        "WARMUP": {
+          "range_pct": 1.0,
+          "levels": 8,
+          "order_size_mult": 1.2,
+          "cycle_tp_enable": true,
+          "cycle_tp_pct": 0.6
+        }
+      }
+    }
+  }
+}
