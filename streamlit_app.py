@@ -8,6 +8,11 @@ from typing import Dict, Tuple
 
 import pandas as pd
 import streamlit as st
+
+PAGE_NS_LIVE = "live"
+
+def k_live(s: str) -> str:
+    return f"{PAGE_NS_LIVE}:{s}"
 import plotly.graph_objects as go
 from streamlit_autorefresh import st_autorefresh
 
@@ -160,7 +165,7 @@ if not symbols:
 timeframe = st.sidebar.selectbox("Timeframe", ["1m", "5m", "15m"], index=1)
 
 refresh = st.sidebar.slider("Refresh sec", 5, 60, 15)
-st_autorefresh(interval=refresh * 1000, key="refresh")
+st_autorefresh(interval=refresh * 1000, key=k_live("refresh"))
 # --- Execution mode (no real orders are ever sent from this app unless live executor is added)
 st.sidebar.subheader("Execution mode")
 exec_mode = st.sidebar.selectbox(
@@ -506,35 +511,35 @@ for sym in symbols:
         cfg["grid_type"] = st.selectbox(
             f"{sym} grid type", ["Linear", "Fibonacci"],
             index=0 if cfg["grid_type"] == "Linear" else 1,
-            key=f"{sym}_grid_type"
+            key=k_live(f"{sym}_grid_type")
         )
         cfg["base_range_pct"] = st.slider(
-            f"{sym} base range ± (%)", 0.1, 20.0, float(cfg["base_range_pct"]), step=0.1, key=f"{sym}_range"
+            f"{sym} base range ± (%)", 0.1, 20.0, float(cfg["base_range_pct"]), step=0.1, key=k_live(f"{sym}_range")
         )
         cfg["dynamic_spacing"] = st.checkbox(
-            f"{sym} regime → dynamic spacing", value=bool(cfg["dynamic_spacing"]), key=f"{sym}_dyn"
+            f"{sym} regime → dynamic spacing", value=bool(cfg["dynamic_spacing"]), key=k_live(f"{sym}_dyn")
         )
         cfg["k_range"] = st.slider(
-            f"{sym} range multiplier strength", 0.5, 3.0, float(cfg["k_range"]), step=0.1, key=f"{sym}_krange"
+            f"{sym} range multiplier strength", 0.5, 3.0, float(cfg["k_range"]), step=0.1, key=k_live(f"{sym}_krange")
         )
         cfg["k_levels"] = st.slider(
-            f"{sym} levels reduction strength", 0.3, 1.0, float(cfg["k_levels"]), step=0.05, key=f"{sym}_klevels"
+            f"{sym} levels reduction strength", 0.3, 1.0, float(cfg["k_levels"]), step=0.05, key=k_live(f"{sym}_klevels")
         )
         if cfg["grid_type"] == "Linear":
             cfg["base_levels"] = st.slider(
-                f"{sym} base levels", 3, 30, int(cfg["base_levels"]), key=f"{sym}_levels"
+                f"{sym} base levels", 3, 30, int(cfg["base_levels"]), key=k_live(f"{sym}_levels")
             )
         # --- Regime profiles (live) ---
         st.markdown("**Regime profiles (live)**")
         cfg["use_regime_profiles"] = st.checkbox(
             f"{sym} Enable regime-conditional parameter sets",
             value=bool(cfg.get("use_regime_profiles", False)),
-            key=f"{sym}_use_profiles",
+            key=k_live(f"{sym}_use_profiles"),
         )
         cfg["regime_profile_rebuild"] = st.checkbox(
             f"{sym} Rebuild on regime change (flatten + reset cycles)",
             value=bool(cfg.get("regime_profile_rebuild", False)),
-            key=f"{sym}_prof_rebuild",
+            key=k_live(f"{sym}_prof_rebuild"),
             help="When effective regime changes: close that symbol's position (sim), rebuild grid at current price, reset cycles.",
         )
 
@@ -547,26 +552,26 @@ for sym in symbols:
                         0.1, 20.0,
                         float(prof.get("range_pct", cfg.get("base_range_pct", 1.0))),
                         step=0.1,
-                        key=f"{sym}_{reg}_rp",
+                        key=k_live(f"{sym}_{reg}_rp"),
                     )
                     if cfg.get("grid_type") == "Linear":
                         prof["levels"] = st.slider(
                             f"{sym} {reg} levels (Linear)",
                             3, 30,
                             int(prof.get("levels", cfg.get("base_levels", 12))),
-                            key=f"{sym}_{reg}_lv",
+                            key=k_live(f"{sym}_{reg}_lv"),
                         )
                     prof["order_size_mult"] = st.slider(
                         f"{sym} {reg} order size mult",
                         0.1, 3.0,
                         float(prof.get("order_size_mult", 1.0)),
                         step=0.1,
-                        key=f"{sym}_{reg}_osm",
+                        key=k_live(f"{sym}_{reg}_osm"),
                     )
                     prof["cycle_tp_enable"] = st.checkbox(
                         f"{sym} {reg} enable Cycle TP",
                         value=bool(prof.get("cycle_tp_enable", False)),
-                        key=f"{sym}_{reg}_ctp_en",
+                        key=k_live(f"{sym}_{reg}_ctp_en"),
                     )
                     prof["cycle_tp_pct"] = st.slider(
                         f"{sym} {reg} Cycle TP (%)",
@@ -574,47 +579,47 @@ for sym in symbols:
                         float(prof.get("cycle_tp_pct", 0.35)),
                         step=0.05,
                         disabled=(not bool(prof.get("cycle_tp_enable", False))),
-                        key=f"{sym}_{reg}_ctp",
+                        key=k_live(f"{sym}_{reg}_ctp"),
                     )
 
         st.divider()
 
         cfg["order_size"] = st.number_input(
             f"{sym} order size (base)", value=float(cfg["order_size"]),
-            min_value=0.0, format="%.6f", key=f"{sym}_osize"
+            min_value=0.0, format="%.6f", key=k_live(f"{sym}_osize")
         )
 
         cfg["price_decimals"] = int(st.number_input(
-            f"{sym} grid price decimals", min_value=0, max_value=8, value=int(cfg.get("price_decimals", 2)), step=1, key=f"{sym}_pdec"
+            f"{sym} grid price decimals", min_value=0, max_value=8, value=int(cfg.get("price_decimals", 2)), step=1, key=k_live(f"{sym}_pdec")
         ))
         cfg["intrabar_replay"] = st.checkbox(
-            f"{sym} intrabar replay (closed candle)", value=bool(cfg.get("intrabar_replay", True)), key=f"{sym}_intrabar"
+            f"{sym} intrabar replay (closed candle)", value=bool(cfg.get("intrabar_replay", True)), key=k_live(f"{sym}_intrabar")
         )
         cfg["intrabar_path"] = st.selectbox(
             f"{sym} intrabar path", ["Standard (O-L-H-C)", "Conservative (L-H-C)"],
             index=0 if str(cfg.get("intrabar_path", "Standard")).startswith("Standard") else 1,
-            key=f"{sym}_intrapath", disabled=(not bool(cfg.get("intrabar_replay", True)))
+            key=k_live(f"{sym}_intrapath"), disabled=(not bool(cfg.get("intrabar_replay", True)))
         )
         cfg["bar_fill_guard"] = st.checkbox(
-            f"{sym} per-bar fill guard (avoid duplicate fills)", value=bool(cfg.get("bar_fill_guard", True)), key=f"{sym}_bar_guard"
+            f"{sym} per-bar fill guard (avoid duplicate fills)", value=bool(cfg.get("bar_fill_guard", True)), key=k_live(f"{sym}_bar_guard")
         )
 
         st.markdown("**BB mean-reversion buy-filter**")
         cfg["bb_mr_enable"] = st.checkbox(
-            f"{sym} BB mean-reversion filter", value=bool(cfg.get("bb_mr_enable", True)), key=f"{sym}_bbmr_en"
+            f"{sym} BB mean-reversion filter", value=bool(cfg.get("bb_mr_enable", True)), key=k_live(f"{sym}_bbmr_en")
         )
         cfg["bb_mr_window"] = st.slider(
-            f"{sym} BB window", 10, 60, int(cfg.get("bb_mr_window", 20)), key=f"{sym}_bbmr_w"
+            f"{sym} BB window", 10, 60, int(cfg.get("bb_mr_window", 20)), key=k_live(f"{sym}_bbmr_w")
         )
         cfg["bb_mr_z"] = st.slider(
-            f"{sym} Z-threshold (buy only if z <= -thr)", 0.0, 3.0, float(cfg.get("bb_mr_z", 0.75)), step=0.05, key=f"{sym}_bbmr_z"
+            f"{sym} Z-threshold (buy only if z <= -thr)", 0.0, 3.0, float(cfg.get("bb_mr_z", 0.75)), step=0.05, key=k_live(f"{sym}_bbmr_z")
         )
         cfg["enable_cycle_tp"] = st.checkbox(
-            f"{sym} Cycle take-profit (per cycle)", value=bool(cfg.get("enable_cycle_tp", False)), key=f"{sym}_ctp_en"
+            f"{sym} Cycle take-profit (per cycle)", value=bool(cfg.get("enable_cycle_tp", False)), key=k_live(f"{sym}_ctp_en")
         )
         cfg["cycle_tp_pct"] = st.slider(
             f"{sym} Cycle TP (%)", 0.05, 5.0, float(cfg.get("cycle_tp_pct", 0.35)), step=0.05,
-            disabled=(not bool(cfg.get("enable_cycle_tp", False))), key=f"{sym}_ctp_pct"
+            disabled=(not bool(cfg.get("enable_cycle_tp", False))), key=k_live(f"{sym}_ctp_pct")
         )
 
         st.markdown("**Inventory management (anti-hang)**")
@@ -622,36 +627,36 @@ for sym in symbols:
             f"{sym} Time-stop per cycle",
             value=bool(cfg.get("enable_time_stop", True)),
             help="Interpreteerbaar: als een cycle te lang open staat, mag hij sluiten op (net) break-even of met afbouwende TP.",
-            key=f"{sym}_ts_en"
+            key=k_live(f"{sym}_ts_en")
         )
         cfg["time_stop_hours"] = st.slider(
             f"{sym} Time-stop after (hours)", 1.0, 240.0, float(cfg.get("time_stop_hours", 48.0)), step=1.0,
-            disabled=(not bool(cfg.get("enable_time_stop", True))), key=f"{sym}_ts_h"
+            disabled=(not bool(cfg.get("enable_time_stop", True))), key=k_live(f"{sym}_ts_h")
         )
         cfg["time_stop_mode"] = st.selectbox(
             f"{sym} Time-stop mode", ["BREAK_EVEN_NET", "REDUCE_TO_TP", "DECAY_TO_TP"],
             index=["BREAK_EVEN_NET","REDUCE_TO_TP","DECAY_TO_TP"].index(str(cfg.get("time_stop_mode","DECAY_TO_TP")).upper() if str(cfg.get("time_stop_mode","DECAY_TO_TP")).upper() in ["BREAK_EVEN_NET","REDUCE_TO_TP","DECAY_TO_TP"] else "DECAY_TO_TP"),
-            disabled=(not bool(cfg.get("enable_time_stop", True))), key=f"{sym}_ts_mode"
+            disabled=(not bool(cfg.get("enable_time_stop", True))), key=k_live(f"{sym}_ts_mode")
         )
         cfg["time_stop_floor_tp_pct"] = st.slider(
             f"{sym} Time-stop TP floor (%)", 0.0, 3.0, float(cfg.get("time_stop_floor_tp_pct", 0.20)), step=0.05,
             disabled=(not bool(cfg.get("enable_time_stop", True))) or str(cfg.get("time_stop_mode","")).upper()=="BREAK_EVEN_NET",
-            key=f"{sym}_ts_floor"
+            key=k_live(f"{sym}_ts_floor")
         )
 
         cfg["trend_guard_enable"] = st.checkbox(
             f"{sym} Trend-guard (no buys in TREND-down)",
             value=bool(cfg.get("trend_guard_enable", True)),
             help="Interpreteerbaar: als regime TREND én de prijs over lookback daalt, blokkeer buys (sells blijven toegestaan).",
-            key=f"{sym}_tg_en"
+            key=k_live(f"{sym}_tg_en")
         )
         cfg["trend_guard_lookback"] = st.slider(
             f"{sym} Trend lookback (candles)", 5, 200, int(cfg.get("trend_guard_lookback", 30)), step=5,
-            disabled=(not bool(cfg.get("trend_guard_enable", True))), key=f"{sym}_tg_lb"
+            disabled=(not bool(cfg.get("trend_guard_enable", True))), key=k_live(f"{sym}_tg_lb")
         )
         cfg["trend_guard_thr_pct"] = st.slider(
             f"{sym} Downtrend threshold (%)", 0.0, 5.0, float(cfg.get("trend_guard_thr_pct", 0.0)), step=0.1,
-            disabled=(not bool(cfg.get("trend_guard_enable", True))), key=f"{sym}_tg_thr"
+            disabled=(not bool(cfg.get("trend_guard_enable", True))), key=k_live(f"{sym}_tg_thr")
         )
 
 
@@ -660,18 +665,18 @@ st.markdown("---")
 cfg["auto_optimize"] = st.checkbox(
     f"{sym} Auto-optimize grid range/levels",
     value=bool(cfg.get("auto_optimize", False)),
-    key=f"{sym}_autoopt",
+    key=k_live(f"{sym}_autoopt"),
 )
 cfg["opt_target_hit"] = st.slider(
     f"{sym} Target hit-rate",
     0.10, 0.90, float(cfg.get("opt_target_hit", 0.40)),
     step=0.05,
     disabled=(not bool(cfg.get("auto_optimize", False))),
-    key=f"{sym}_opt_hit",
+    key=k_live(f"{sym}_opt_hit"),
 )
 opt_apply = st.button(
     f"Apply suggested params for {sym}",
-    key=f"{sym}_opt_apply",
+    key=k_live(f"{sym}_opt_apply"),
     disabled=(not bool(cfg.get("auto_optimize", False))),
     help="Applies the suggested range/levels to this pair's config."
 )
@@ -681,21 +686,21 @@ if opt_apply:
 cfg["enable_dyn_os_mult"] = st.checkbox(
     f"{sym} Dynamic order-size multiplier",
     value=bool(cfg.get("enable_dyn_os_mult", False)),
-    key=f"{sym}_dynos",
+    key=k_live(f"{sym}_dynos"),
 )
 cfg["dyn_os_min_mult"] = st.slider(
     f"{sym} Dyn size min mult",
     0.1, 1.0, float(cfg.get("dyn_os_min_mult", 0.30)),
     step=0.05,
     disabled=(not bool(cfg.get("enable_dyn_os_mult", False))),
-    key=f"{sym}_dynos_min",
+    key=k_live(f"{sym}_dynos_min"),
 )
 cfg["dyn_os_max_mult"] = st.slider(
     f"{sym} Dyn size max mult",
     1.0, 3.0, float(cfg.get("dyn_os_max_mult", 1.50)),
     step=0.10,
     disabled=(not bool(cfg.get("enable_dyn_os_mult", False))),
-    key=f"{sym}_dynos_max",
+    key=k_live(f"{sym}_dynos_max"),
 )
 
 # ----------------------------
