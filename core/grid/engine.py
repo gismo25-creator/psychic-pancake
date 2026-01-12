@@ -47,6 +47,12 @@ class GridEngine:
         self.open_cycles: Dict[float, OpenCycle] = {}        # key: buy_level
         self.closed_cycles: List[Dict[str, Any]] = []
         self.trades: List[Dict[str, Any]] = []
+        # Intrabar safety: prevent repeated fills at the same buy-level within the same bar timestamp.
+        # This mitigates duplicate BUY/SELL sequences when using intrabar OHLC replay.
+        self.enable_bar_fill_guard: bool = True
+        self._guard_bar_ts = None
+        self._guard_buys_done: Set[float] = set()
+        self._guard_sells_done: Set[float] = set()
 
     def reset_open_cycles(self) -> None:
         """Clears all pending cycles and restores initial buy levels."""
@@ -102,6 +108,14 @@ class GridEngine:
     def check_price(self, price: float, trader, ts, allow_buys: bool = True, buy_guard=None) -> None:
         price = float(price)
 
+        # Per-bar fill guard (keyed by ts): reset guards when moving to a new candle/bar.
+        if bool(getattr(self, 'enable_bar_fill_guard', True)):
+            if getattr(self, '_guard_bar_ts', None) != ts:
+                self._guard_bar_ts = ts
+                self._guard_buys_done = set()
+                self._guard_sells_done = set()
+
+
         # ----------------------------
         # BUY
         # ----------------------------
@@ -113,6 +127,12 @@ class GridEngine:
                         if not ok:
                             if hasattr(trader, "record_blocked"):
                                 trader.record_blocked("BUY", self.symbol, float(buy), float(self.order_size), ts, why)
+                            continue
+
+                    # Bar-level guard: avoid repeated BUY at the same level within the same bar,
+                    # and avoid re-buying a level that was already sold in the same bar.
+                    if bool(getattr(self, 'enable_bar_fill_guard', True)):
+                        if float(buy) in getattr(self, '_guard_buys_done', set()) or float(buy) in getattr(self, '_guard_sells_done', set()):
                             continue
 
                     tr = trader.buy(self.symbol, float(buy), float(self.order_size), ts, reason="GRID")
@@ -130,6 +150,10 @@ class GridEngine:
                         amount=float(tr.amount),
                         buy_time=tr.time,
                     )
+
+
+                    if bool(getattr(self, 'enable_bar_fill_guard', True)):
+                        self._guard_buys_done.add(float(buy))
 
                     self.trades.append({
                         "time": tr.time, "symbol": tr.symbol, "side": tr.side,
@@ -204,6 +228,11 @@ class GridEngine:
                     continue
 
                 reason = "GRID_FLOOR" if float(exit_price) > float(sell) else "GRID"
+                # Bar-level guard: avoid repeated SELL for the same buy_level within the same bar.
+                if bool(getattr(self, 'enable_bar_fill_guard', True)):
+                    if float(buy_level) in getattr(self, '_guard_sells_done', set()):
+                        continue
+
                 tr = trader.sell(self.symbol, float(exit_price), float(oc.amount), ts, reason=reason)
                 if tr is None:
                     continue
@@ -225,6 +254,10 @@ class GridEngine:
 
                 self.active_sells.remove(sell)
                 self.active_buys.add(buy_level)
+
+                if bool(getattr(self, 'enable_bar_fill_guard', True)):
+                    self._guard_sells_done.add(float(buy_level))
+
 
                 self.trades.append({
                     "time": tr.time, "symbol": tr.symbol, "side": tr.side,
@@ -261,6 +294,11 @@ class GridEngine:
                 exit_price = max(float(target_price), float(be_limit))
 
                 if price >= exit_price:
+                    # Bar-level guard: avoid repeated TIME_STOP sells for same cycle within the same bar.
+                    if bool(getattr(self, 'enable_bar_fill_guard', True)):
+                        if float(buy_level) in getattr(self, '_guard_sells_done', set()):
+                            continue
+
                     tr = trader.sell(self.symbol, float(exit_price), float(oc.amount), ts, reason="TIME_STOP")
                     if tr is None:
                         continue
@@ -283,6 +321,10 @@ class GridEngine:
 
                     self.open_cycles.pop(buy_level, None)
                     self.active_buys.add(buy_level)
+
+                    if bool(getattr(self, 'enable_bar_fill_guard', True)):
+                        self._guard_sells_done.add(float(buy_level))
+
 
                     self.trades.append({
                         "time": tr.time, "symbol": tr.symbol, "side": tr.side,

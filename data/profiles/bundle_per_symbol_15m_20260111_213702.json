@@ -115,16 +115,7 @@
         "test_trades": 18,
         "test_win_rate_pct": 88.88888888888889
       }
-    ],
-    "sanity_passed": true,
-    "sanity_summary": {
-      "bundle_id": "2026-01-11T21:37:02.580771+00:00::data\\profiles\\bundle_per_symbol_15m_20260111_213702.json",
-      "require_no_errors": true,
-      "n_symbols": 0,
-      "fails": 0,
-      "errors": 0
-    },
-    "sanity_rows": []
+    ]
   },
   "profiles": {
     "SOL/EUR": {

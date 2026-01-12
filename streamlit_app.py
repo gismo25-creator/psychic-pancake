@@ -458,6 +458,10 @@ def default_cfg(sym: str):
         "k_levels": 0.7,
         "base_levels": 10,
         "order_size": 0.001,
+        "price_decimals": 2,
+        "intrabar_replay": True,
+        "intrabar_path": "Standard (O-L-H-C)",
+        "bar_fill_guard": True,
         "enable_cycle_tp": False,
         "cycle_tp_pct": 0.35,
         "enable_time_stop": True,
@@ -579,6 +583,22 @@ for sym in symbols:
             f"{sym} order size (base)", value=float(cfg["order_size"]),
             min_value=0.0, format="%.6f", key=f"{sym}_osize"
         )
+
+        cfg["price_decimals"] = int(st.number_input(
+            f"{sym} grid price decimals", min_value=0, max_value=8, value=int(cfg.get("price_decimals", 2)), step=1, key=f"{sym}_pdec"
+        ))
+        cfg["intrabar_replay"] = st.checkbox(
+            f"{sym} intrabar replay (closed candle)", value=bool(cfg.get("intrabar_replay", True)), key=f"{sym}_intrabar"
+        )
+        cfg["intrabar_path"] = st.selectbox(
+            f"{sym} intrabar path", ["Standard (O-L-H-C)", "Conservative (L-H-C)"],
+            index=0 if str(cfg.get("intrabar_path", "Standard")).startswith("Standard") else 1,
+            key=f"{sym}_intrapath", disabled=(not bool(cfg.get("intrabar_replay", True)))
+        )
+        cfg["bar_fill_guard"] = st.checkbox(
+            f"{sym} per-bar fill guard (avoid duplicate fills)", value=bool(cfg.get("bar_fill_guard", True)), key=f"{sym}_bar_guard"
+        )
+
         st.markdown("**BB mean-reversion buy-filter**")
         cfg["bb_mr_enable"] = st.checkbox(
             f"{sym} BB mean-reversion filter", value=bool(cfg.get("bb_mr_enable", True)), key=f"{sym}_bbmr_en"
@@ -1317,6 +1337,16 @@ for sym, df in dfs.items():
         eff_levels = None
         grid = generate_fibonacci_grid(lower, upper)
 
+    # Dedupe/quantize grid levels to exchange-like price precision (reduces float duplicates).
+    try:
+        pdec = int(cfg.get("price_decimals", 2))
+    except Exception:
+        pdec = 2
+    qgrid = sorted({round(float(x), pdec) for x in grid})
+    if len(qgrid) >= 2:
+        grid = qgrid
+
+
     # --- Engine/grid reuse: keep grid fixed and only rebuild when config/regime changes or price leaves bounds.
     cfg_sig = (
         sym, timeframe, cfg['grid_type'],
@@ -1385,6 +1415,7 @@ for sym, df in dfs.items():
     eng.cycle_tp_pct = float(cfg.get("cycle_tp_pct", 0.35))
 
     eng.enable_time_stop = bool(cfg.get("enable_time_stop", True))
+    eng.enable_bar_fill_guard = bool(cfg.get("bar_fill_guard", True))
     eng.time_stop_hours = float(cfg.get("time_stop_hours", 48.0))
     eng.time_stop_mode = str(cfg.get("time_stop_mode", "DECAY_TO_TP")).upper()
     eng.time_stop_floor_tp_pct = float(cfg.get("time_stop_floor_tp_pct", 0.20))
@@ -1479,10 +1510,16 @@ for sym, df in dfs.items():
             if (prev_bar_ts is None) or (bar_ts > prev_bar_ts):
                 st.session_state.last_bar_ts[sym] = bar_ts
                 o = float(closed["open"]); h = float(closed["high"]); l = float(closed["low"]); c = float(closed["close"])
-                # Approximate intrabar path: open -> low -> high -> close (simple, deterministic).
-                for px in (o, l, h, c):
-                    if st.session_state.trading_enabled and (not pair_is_paused):
-                        eng.check_price(px, trader, bar_ts, allow_buys=allow_buys, buy_guard=buy_guard)
+                # Intrabar replay: process the last CLOSED candle once per bar to capture level crossings.
+                if bool(cfg.get("intrabar_replay", True)):
+                    path = str(cfg.get("intrabar_path", "Standard (O-L-H-C)"))
+                    if path.startswith("Conservative"):
+                        pts = (l, h, c)  # fewer touches; avoids optimistic churn
+                    else:
+                        pts = (o, l, h, c)
+                    for px in pts:
+                        if st.session_state.trading_enabled and (not pair_is_paused):
+                            eng.check_price(px, trader, bar_ts, allow_buys=allow_buys, buy_guard=buy_guard)
         
         eng.check_price(price, trader, ts, allow_buys=allow_buys, buy_guard=buy_guard)
 
