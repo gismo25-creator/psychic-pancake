@@ -145,22 +145,13 @@
         "train_end": "2025-12-06 23:15:00+00:00",
         "test_start": "2025-12-06 23:30:00+00:00",
         "test_end": "2025-12-28 22:45:00+00:00",
-        "test_total_pnl": 0.5229484886058344,
+        "test_total_pnl": -0.5229484886058344,
         "test_max_dd_pct": 0.17104819512807332,
-        "test_score": 0.6939966837339078,
+        "test_score": -0.6939966837339078,
         "test_trades": 92,
         "test_win_rate_pct": 82.5
       }
-    ],
-    "sanity_passed": true,
-    "sanity_summary": {
-      "bundle_id": "2026-01-14T23:25:28.524912+00:00::data\\profiles\\bundle_per_symbol_15m_20260114_232528.json",
-      "require_no_errors": true,
-      "n_symbols": 0,
-      "fails": 0,
-      "errors": 0
-    },
-    "sanity_rows": []
+    ]
   },
   "profiles": {
     "BTC/EUR": {
