@@ -400,6 +400,216 @@ else:
         apath = rollback_active(store_dir=store_dir, history_path=pick)
         st.success(f"Rolled back ACTIVE to {apath}")
 
+# ----------------------------
+# Revalidation (ACTIVE) + Watchlist
+# ----------------------------
+st.subheader("Revalidation (ACTIVE)")
+
+# Persist results across reruns
+if "reval_active_result" not in st.session_state:
+    st.session_state["reval_active_result"] = None
+
+# Watchlist state persisted on disk
+watchlist_path = Path(store_dir) / "watchlist.json"
+def _load_watchlist() -> dict:
+    try:
+        if watchlist_path.is_file():
+            return json.loads(watchlist_path.read_text(encoding="utf-8"))
+    except Exception:
+        pass
+    return {"active_status": "OK", "fails_in_row": 0, "last": None}
+
+def _save_watchlist(d: dict) -> None:
+    try:
+        watchlist_path.write_text(json.dumps(d, indent=2, default=str), encoding="utf-8")
+    except Exception as e:
+        st.warning(f"Could not save watchlist.json: {e}")
+
+wl = _load_watchlist()
+st.caption(f"ACTIVE status: **{wl.get('active_status','OK')}**  |  fails in a row: **{int(wl.get('fails_in_row',0))}**")
+
+cR1, cR2, cR3, cR4 = st.columns([2,2,2,2])
+with cR1:
+    reval_days = st.number_input("Revalidation window (days)", min_value=3, max_value=365, value=30, step=1, key="reval_days")
+with cR2:
+    reval_min_trades = st.number_input("Min trades (pass)", min_value=0, max_value=1000, value=50, step=5, key="reval_min_trades")
+with cR3:
+    reval_max_dd_pct = st.number_input("Max DD % (pass)", min_value=0.1, max_value=80.0, value=10.0, step=0.5, key="reval_max_dd_pct")
+with cR4:
+    reval_require_pnl_pos = st.checkbox("Require total PnL >= 0", value=True, key="reval_require_pnl_pos")
+
+cR5, cR6, cR7 = st.columns([2,2,2])
+with cR5:
+    reval_force_refresh = st.checkbox("Force refresh market data", value=False, key="reval_force_refresh")
+with cR6:
+    reval_fail_hysteresis = st.number_input("Hysteresis: fails before WATCHLIST", min_value=1, max_value=10, value=2, step=1, key="reval_fail_hys")
+with cR7:
+    reval_start_cash = st.number_input("Start cash (EUR)", min_value=100.0, max_value=100000.0, value=float(meta.get("start_cash", 1000.0) or 1000.0), step=50.0, key="reval_start_cash")
+
+run_reval = st.button("Run revalidation on ACTIVE", use_container_width=True, key="reval_run_btn")
+
+def _passes(trades: int, pnl: float, dd_pct: float) -> Tuple[bool, list]:
+    reasons = []
+    ok = True
+    if trades < int(reval_min_trades):
+        ok = False
+        reasons.append("MIN_TRADES")
+    if dd_pct > float(reval_max_dd_pct):
+        ok = False
+        reasons.append("DD_CAP")
+    if bool(reval_require_pnl_pos) and pnl < 0:
+        ok = False
+        reasons.append("PNL_NEG")
+    return ok, reasons
+
+if run_reval:
+    ensure_store_dir(store_dir)
+    ap = active_path(store_dir)
+    if not Path(ap).is_file():
+        st.error("No ACTIVE bundle found yet. Promote a bundle to ACTIVE first.")
+    else:
+        abundle = load_bundle(ap)
+        aprofiles = abundle.get("profiles", {}) if isinstance(abundle, dict) else {}
+        ameta = (abundle.get("meta", {}) or {}) if isinstance(abundle, dict) else {}
+
+        timeframe_active = str(ameta.get("timeframe", meta.get("timeframe", "15m")))
+        fees_meta_a = (ameta.get("fees") or {}) if isinstance(ameta.get("fees"), dict) else {}
+        maker_a = float(fees_meta_a.get("maker", maker_fee))
+        taker_a = float(fees_meta_a.get("taker", taker_fee))
+        slip_a = float(fees_meta_a.get("slippage", slippage))
+        mode_a = str(fees_meta_a.get("mode", fee_mode))
+
+        since = pd.Timestamp.utcnow().tz_localize("UTC") - pd.Timedelta(days=int(reval_days))
+        until = pd.Timestamp.utcnow().tz_localize("UTC")
+
+        rows = []
+        for sym, cfg in aprofiles.items():
+            try:
+                df = load_or_fetch(sym, timeframe=timeframe_active, since=since, until=until, force_refresh=bool(reval_force_refresh))
+                if df is None or df.empty:
+                    rows.append({"symbol": sym, "status": "ERROR", "reason": "NO_DATA", "trades": 0, "pnl": 0.0, "max_dd_pct": 0.0})
+                    continue
+
+                dfs = {sym: df}
+                pcfg = {sym: cfg}
+
+                trades_df, equity_curve, decision_log, trader = run_backtest(
+                    dfs=dfs,
+                    pair_cfg=pcfg,
+                    timeframe=timeframe_active,
+                    start_cash=float(reval_start_cash),
+                    maker_fee=maker_a,
+                    taker_fee=taker_a,
+                    slippage=slip_a,
+                    fee_mode=mode_a,
+                    quote_ccy=str(ameta.get("quote_ccy", "EUR") or "EUR"),
+                    max_exposure_quote={},
+                    regime_profiles=pcfg[sym].get("regime_profiles"),
+                    enable_regime_profiles=bool(pcfg[sym].get("use_regime_profiles", False)),
+                    confirm_n=int(ameta.get("confirm_n", 3) or 3),
+                    cooldown_candles=int(ameta.get("cooldown_candles", 0) or 0),
+                    rebuild_on_regime_change=bool(ameta.get("rebuild_on_regime_change", False)),
+                )
+
+                summ = summarize_run(equity_curve, trades_df)
+                trades_n = int(summ.get("trades", 0) or 0)
+                pnl = float(summ.get("total_pnl", 0.0) or 0.0)
+                dd_pct = float(summ.get("max_dd_pct", 0.0) or 0.0)
+
+                ok_sym, reasons = _passes(trades_n, pnl, dd_pct)
+                rows.append({
+                    "symbol": sym,
+                    "status": "PASS" if ok_sym else "FAIL",
+                    "reason": ",".join(reasons) if reasons else "OK",
+                    "trades": trades_n,
+                    "pnl": pnl,
+                    "max_dd_pct": dd_pct,
+                })
+            except Exception as e:
+                rows.append({"symbol": sym, "status": "ERROR", "reason": str(e), "trades": 0, "pnl": 0.0, "max_dd_pct": 0.0})
+
+        rdf = pd.DataFrame(rows).sort_values("symbol") if rows else pd.DataFrame()
+        st.session_state["reval_active_result"] = {
+            "ts": pd.Timestamp.utcnow().isoformat(),
+            "window_days": int(reval_days),
+            "timeframe": timeframe_active,
+            "maker_fee": maker_a,
+            "taker_fee": taker_a,
+            "slippage": slip_a,
+            "fee_mode": mode_a,
+            "rows": rows,
+        }
+
+        # Overall pass
+        pass_syms = (rdf["status"] == "PASS").sum() if not rdf.empty else 0
+        fail_syms = (rdf["status"] == "FAIL").sum() if not rdf.empty else 0
+        err_syms = (rdf["status"] == "ERROR").sum() if not rdf.empty else 0
+        overall_pass = (fail_syms == 0 and err_syms == 0)
+
+        # Update watchlist hysteresis
+        if overall_pass:
+            wl["fails_in_row"] = 0
+            wl["active_status"] = "OK"
+        else:
+            wl["fails_in_row"] = int(wl.get("fails_in_row", 0)) + 1
+            if wl["fails_in_row"] >= int(reval_fail_hysteresis):
+                wl["active_status"] = "WATCHLIST"
+        wl["last"] = st.session_state["reval_active_result"]
+        _save_watchlist(wl)
+
+        # Audit log
+        append_audit(
+            event="REVALIDATION_ACTIVE",
+            payload={
+                "store_dir": store_dir,
+                "active_status": wl.get("active_status", "OK"),
+                "fails_in_row": int(wl.get("fails_in_row", 0)),
+                "overall_pass": bool(overall_pass),
+                "pass_syms": int(pass_syms),
+                "fail_syms": int(fail_syms),
+                "error_syms": int(err_syms),
+                "window_days": int(reval_days),
+                "timeframe": timeframe_active,
+            },
+            store_dir=store_dir,
+        )
+
+# Render last result if any
+res = st.session_state.get("reval_active_result")
+if res and isinstance(res, dict) and res.get("rows"):
+    st.success("Revalidation completed. Results persist while you navigate.")
+    rdf = pd.DataFrame(res["rows"]).copy()
+    if not rdf.empty:
+        rdf["pnl"] = rdf["pnl"].astype(float).round(4)
+        rdf["max_dd_pct"] = rdf["max_dd_pct"].astype(float).round(3)
+        st.dataframe(rdf, use_container_width=True, height=220)
+else:
+    st.info("Run revalidation to evaluate ACTIVE on recent history and (optionally) mark WATCHLIST with hysteresis.")
+
+cW1, cW2, cW3 = st.columns([2,2,3])
+with cW1:
+    if st.button("Mark WATCHLIST (manual)", key="reval_mark_watch"):
+        wl = _load_watchlist()
+        wl["active_status"] = "WATCHLIST"
+        _save_watchlist(wl)
+        append_audit(event="WATCHLIST_SET", payload={"reason": "MANUAL"}, store_dir=store_dir)
+        st.success("ACTIVE marked as WATCHLIST.")
+with cW2:
+    if st.button("Clear WATCHLIST", key="reval_clear_watch"):
+        wl = _load_watchlist()
+        wl["active_status"] = "OK"
+        wl["fails_in_row"] = 0
+        _save_watchlist(wl)
+        append_audit(event="WATCHLIST_CLEARED", payload={"reason": "MANUAL"}, store_dir=store_dir)
+        st.success("WATCHLIST cleared.")
+with cW3:
+    # Recommend rollback if WATCHLIST
+    wl = _load_watchlist()
+    if wl.get("active_status") == "WATCHLIST":
+        st.warning("ACTIVE is WATCHLIST. If this persists, consider rollback to a previous ACTIVE from history.")
+    else:
+        st.caption("Rollback is optional. Use history if ACTIVE degrades over time.")
+
 st.subheader("Audit log")
 audit_path = Path(store_dir) / "audit_log.jsonl"
 if audit_path.is_file():

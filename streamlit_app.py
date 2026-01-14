@@ -13,6 +13,12 @@ PAGE_NS_LIVE = "live"
 
 def k_live(s: str) -> str:
     return f"{PAGE_NS_LIVE}:{s}"
+
+
+STATE_NS_LIVE = "live"
+
+def s_live(key: str) -> str:
+    return f"{STATE_NS_LIVE}:{key}"
 import plotly.graph_objects as go
 from streamlit_autorefresh import st_autorefresh
 
@@ -35,6 +41,7 @@ from core.grid.linear import generate_linear_grid
 from core.grid.fibonacci import generate_fibonacci_grid
 from core.grid.engine import GridEngine
 from core.exchange.simulator import PortfolioSimulatorTrader
+from core.exchange.bitvavo_live import BitvavoLiveTrader, BitvavoRateLimitBanned
 
 from core.ml.volatility import atr, realized_vol, bollinger_bandwidth, adx, vol_cluster_acf1
 from core.ml.regime import classify_regime
@@ -94,7 +101,7 @@ if "bb_state" not in st.session_state:
 c1, c2, c3, c4, c5 = st.columns(5)
 
 with c1:
-    if st.button("▶ START", width="stretch", disabled=(exec_mode.startswith("Dry-run") and (not dryrun_allowed))):
+    if st.button("▶ START", width="stretch", disabled=((exec_mode.startswith("Dry-run") and (not dryrun_allowed)) or (exec_mode.startswith("Live") and (not st.session_state.get("live_enabled", False))))):
         # Require confirmation to resume
         st.session_state.start_pending = True
         st.session_state.start_pending_ts = time.time()
@@ -111,20 +118,25 @@ with c3:
         help="Panic button: closes all positions at market (simulation) and pauses trading."
     ):
         # Defer execution until we have latest prices.
-        st.session_state.panic_flatten = True
+        # In LIVE mode, require arming before submitting market sells.
+        if exec_mode.startswith("Live") and st.session_state.get("live_enabled", False) and (not st.session_state.get("live_arm_panic", False)):
+            st.session_state.panic_flatten = False
+            st.warning("STOP & FLATTEN is not armed for LIVE. Trading paused only. Arm it in the Live sidebar to allow market sells.")
+        else:
+            st.session_state.panic_flatten = True
         st.session_state.trading_enabled = False
         st.session_state.start_pending = False
         # Latch portfolio stop so no new buys happen until reset.
-        st.session_state.portfolio_stop_active = True
+        st.session_state[s_live('portfolio_stop_active')] = True
 
 with c4:
     if st.button("🔓 UNLATCH STOP", width="stretch", help="Clear portfolio stop latch (allow new buys again). Trading stays paused; resume manually."):
-        st.session_state.portfolio_stop_active = False
+        st.session_state[s_live('portfolio_stop_active')] = False
         st.session_state.trading_enabled = False
         st.session_state.start_pending = False
         # Reset peak to current equity to avoid immediate retrigger.
         # (Peak is set later after equity is computed.)
-        st.session_state.portfolio_peak_eq = None
+        st.session_state[s_live('portfolio_peak_eq')] = None
 
 with c5:
     if st.button("⟲ RESET SESSION", width="stretch"):
@@ -142,7 +154,7 @@ if st.session_state.start_pending:
         with warn_col:
             st.warning("Bevestig START (binnen 15s) om trading te hervatten.")
         with btn_col:
-            if st.button("✅ CONFIRM RESUME", width="stretch", disabled=(exec_mode.startswith("Dry-run") and (not dryrun_allowed))):
+            if st.button("✅ CONFIRM RESUME", width="stretch", disabled=((exec_mode.startswith("Dry-run") and (not dryrun_allowed)) or (exec_mode.startswith("Live") and (not st.session_state.get("live_enabled", False))))):
                 # Only allow resume if portfolio stop not active.
                 if st.session_state.get("portfolio_stop_active", False):
                     st.error("Portfolio stop is ACTIVE. Reset session om opnieuw te starten.")
@@ -150,10 +162,106 @@ if st.session_state.start_pending:
                     st.session_state.trading_enabled = True
                 st.session_state.start_pending = False
 
+
+if exec_mode.startswith("Live") and st.session_state.get("live_enabled", False):
+    st.warning("LIVE EXECUTOR ENABLED: this session can place REAL orders on Bitvavo. Use small sizing and confirm your settings.")
+
 st.caption(f"Trading status: {'RUNNING' if st.session_state.trading_enabled else 'STOPPED'} | Mode: {exec_mode}")
 
 
 # ----------------------------
+
+
+# Safety gates for LIVE (real orders)
+live_allowed = True
+live_enabled = False
+live_missing = []
+live_ack = False
+
+if exec_mode.startswith("Live"):
+    if active_bundle is None and (not allow_dryrun_without_active):
+        live_allowed = False
+        st.sidebar.error("Live gate: no ACTIVE bundle found. Promote a bundle to ACTIVE in Profile Manager.")
+    else:
+        try:
+            if active_bundle is not None:
+                ok, errs, warns = validate_bundle(active_bundle)
+                if warns:
+                    st.sidebar.warning("\n".join(warns))
+                if (not ok) and (not allow_dryrun_without_active):
+                    live_allowed = False
+                    st.sidebar.error("Live gate: ACTIVE bundle invalid. Fix/replace it in Profile Manager.")
+                else:
+                    meta = active_bundle.get("meta", {}) or {}
+                    if (not bool(meta.get("sanity_passed", False))) and (not allow_dryrun_without_active):
+                        live_allowed = False
+                        st.sidebar.error("Live gate: ACTIVE bundle is not marked sanity_passed. Re-promote after a PASS sanity test.")
+        except Exception as e:
+            if not allow_dryrun_without_active:
+                live_allowed = False
+                st.sidebar.error(f"Live gate: could not load/validate ACTIVE bundle: {e}")
+
+    st.sidebar.subheader("Live executor (Bitvavo)")
+    st.sidebar.caption("Live mode places REAL orders only if you explicitly enable it and acknowledge risk. Default is OFF.")
+
+    api_key = st.secrets.get("BITVAVO_API_KEY", "")
+    api_secret = st.secrets.get("BITVAVO_API_SECRET", "")
+
+    if not api_key:
+        live_missing.append("BITVAVO_API_KEY")
+    if not api_secret:
+        live_missing.append("BITVAVO_API_SECRET")
+
+    if live_missing:
+        live_allowed = False
+        st.sidebar.error("Missing Streamlit secrets: " + ", ".join(live_missing))
+        st.sidebar.code('BITVAVO_API_KEY = "..."\\nBITVAVO_API_SECRET = "..."', language="toml")
+
+    live_ack = st.sidebar.checkbox(
+        "I understand Live mode can place REAL orders on Bitvavo",
+        value=bool(st.session_state.get("live_ack", False)),
+        key="live_ack",
+    )
+    live_enabled = st.sidebar.toggle(
+        "Enable Live executor (REAL orders)",
+        value=False,
+        disabled=(not live_allowed) or (not live_ack),
+        help="When enabled, the bot will send market orders via authenticated Bitvavo API.",
+        key="live_enabled_toggle",
+    )
+
+    
+
+    # Extra safety: panic / STOP & FLATTEN must be explicitly armed in LIVE
+    live_arm_panic = st.sidebar.toggle(
+        "Arm STOP & FLATTEN (market sells)",
+        value=bool(st.session_state.get("live_arm_panic", False)),
+        disabled=(not live_enabled),
+        help="When armed, STOP & FLATTEN will submit market SELL orders for all held assets. When NOT armed, the button only pauses trading.",
+        key="live_arm_panic",
+    )
+
+    # Extra safety: hard cap per order in quote currency
+    live_max_order_quote = st.sidebar.number_input(
+        "Live: max order notional (EUR) per order",
+        min_value=0.0,
+        max_value=50000.0,
+        value=float(st.session_state.get("live_max_order_quote", 50.0)),
+        step=10.0,
+        help="Hard cap on order notional (price*amount) for LIVE orders. Set 0 to disable (not recommended).",
+        key="live_max_order_quote",
+    )
+    if refresh < 15:
+        st.sidebar.warning("For Live mode, keep refresh >= 15s to reduce rate-limit pressure.")
+
+    st.sidebar.info("Live executor v1 uses MARKET orders (immediate fills). Limit-order lifecycle management is not enabled yet.")
+
+    st.session_state["live_allowed"] = bool(live_allowed)
+    st.session_state["live_enabled"] = bool(live_enabled)
+else:
+    st.session_state["live_allowed"] = False
+    st.session_state["live_enabled"] = False
+
 # Market selection
 # ----------------------------
 st.sidebar.subheader("Market")
@@ -170,9 +278,9 @@ st_autorefresh(interval=refresh * 1000, key=k_live("refresh"))
 st.sidebar.subheader("Execution mode")
 exec_mode = st.sidebar.selectbox(
     "Mode",
-    ["Simulation (paper, candle close)", "Dry-run Live (paper, ticker mid)"],
+    ["Simulation (paper, candle close)", "Dry-run Live (paper, ticker mid)", "Live (Bitvavo, real orders)"],
     index=0, key="exec_mode",
-    help="Dry-run Live uses Bitvavo ticker bid/ask (mid) for triggering and paper fills. No real orders are sent."
+    help="Simulation and Dry-run Live never place real orders. Live (Bitvavo) can place REAL orders when explicitly enabled and acknowledged."
 )
 
 # Safety gates for Dry-run Live
@@ -386,12 +494,12 @@ if uploaded is not None:
                 st.session_state.setdefault("pair_cfg", {})
                 for sym, blob in cfg_blob.items():
                     sym_u = str(sym).upper()
-                    st.session_state.pair_cfg.setdefault(sym_u, {})
+                    st.session_state[s_live('pair_cfg')].setdefault(sym_u, {})
                     if isinstance(blob, dict):
-                        st.session_state.pair_cfg[sym_u]["use_regime_profiles"] = bool(blob.get("use_regime_profiles", True))
-                        st.session_state.pair_cfg[sym_u]["regime_profile_rebuild"] = bool(blob.get("regime_profile_rebuild", False))
+                        st.session_state[s_live('pair_cfg')][sym_u]["use_regime_profiles"] = bool(blob.get("use_regime_profiles", True))
+                        st.session_state[s_live('pair_cfg')][sym_u]["regime_profile_rebuild"] = bool(blob.get("regime_profile_rebuild", False))
                         if "regime_profiles" in blob and isinstance(blob["regime_profiles"], dict):
-                            st.session_state.pair_cfg[sym_u]["regime_profiles"] = blob["regime_profiles"]
+                            st.session_state[s_live('pair_cfg')][sym_u]["regime_profiles"] = blob["regime_profiles"]
 
                 st.session_state.profiles_import_hash = file_hash
                 st.sidebar.success("Profiles geïmporteerd. Je kunt nu per pair de settings bekijken/aanpassen.")
@@ -407,7 +515,7 @@ if st.sidebar.button("Apply BEST profiles from Trainer", width="stretch"):
         st.session_state.setdefault("pair_cfg", {})
         for sym, blob in trained.items():
             sym_u = str(sym).upper()
-            st.session_state.pair_cfg.setdefault(sym_u, {}).update(blob)
+            st.session_state[s_live('pair_cfg')].setdefault(sym_u, {}).update(blob)
         st.sidebar.success("Applied BEST trained profiles.")
     else:
         st.sidebar.info("No trained profiles found in session. Run Trainer page first.")
@@ -418,7 +526,7 @@ if st.sidebar.button("Apply optimized profiles from Trainer", width="stretch"):
         st.session_state.setdefault("pair_cfg", {})
         for sym, blob in trained.items():
             sym_u = str(sym).upper()
-            st.session_state.pair_cfg.setdefault(sym_u, {}).update(blob)
+            st.session_state[s_live('pair_cfg')].setdefault(sym_u, {}).update(blob)
         st.sidebar.success("Applied trained profiles.")
     else:
         st.sidebar.info("No trained profiles found in session. Run Trainer page first.")
@@ -451,8 +559,8 @@ if "opt_suggestions" not in st.session_state:
 if "last_hit_rate" not in st.session_state:
     st.session_state.last_hit_rate = {}
 
-if "pair_cfg" not in st.session_state:
-    st.session_state.pair_cfg = {}
+if s_live('pair_cfg') not in st.session_state:
+    st.session_state[s_live('pair_cfg')] = {}
 
 def default_cfg(sym: str):
     return {
@@ -488,9 +596,9 @@ def default_cfg(sym: str):
     }
 
 for sym in symbols:
-    if sym not in st.session_state.pair_cfg:
-        st.session_state.pair_cfg[sym] = default_cfg(sym)
-    cfg = st.session_state.pair_cfg[sym]
+    if sym not in st.session_state[s_live('pair_cfg')]:
+        st.session_state[s_live('pair_cfg')][sym] = default_cfg(sym)
+    cfg = st.session_state[s_live('pair_cfg')][sym]
 
     # --- BB mean-reversion state (for buy-filter) ---
     try:
@@ -706,42 +814,66 @@ cfg["dyn_os_max_mult"] = st.slider(
 # ----------------------------
 # Initialize portfolio trader
 # ----------------------------
-trader_signature = (maker_fee, taker_fee, slippage_pct, fee_mode, tuple(sorted(per_asset_caps.items())))
+
+trader_signature = (exec_mode, maker_fee, taker_fee, slippage_pct, fee_mode, tuple(sorted(per_asset_caps.items())))
+
+# Create or swap trader when configuration changes
 if "trader_signature" not in st.session_state or st.session_state.trader_signature != trader_signature:
     st.session_state.trader_signature = trader_signature
-    st.session_state.trader = PortfolioSimulatorTrader(
-        cash_quote=1000.0,
-        maker_fee=maker_fee,
-        taker_fee=taker_fee,
-        slippage=slippage_pct,
-        fee_mode=fee_mode,
-        quote_ccy="EUR",
-        max_exposure_quote=per_asset_caps,
-    )
+
+    # Default: simulation trader
+    if (not exec_mode.startswith("Live")) or (not st.session_state.get("live_enabled", False)):
+        st.session_state.trader = PortfolioSimulatorTrader(
+            cash_quote=1000.0,
+            maker_fee=maker_fee,
+            taker_fee=taker_fee,
+            slippage=slippage_pct,
+            fee_mode=fee_mode,
+            quote_ccy="EUR",
+            max_exposure_quote=per_asset_caps,
+        )
+    else:
+        api_key = st.secrets.get("BITVAVO_API_KEY", "")
+        api_secret = st.secrets.get("BITVAVO_API_SECRET", "")
+        st.session_state.trader = BitvavoLiveTrader(
+            api_key=api_key,
+            api_secret=api_secret,
+            maker_fee=maker_fee,
+            taker_fee=taker_fee,
+            slippage=slippage_pct,
+            fee_mode=fee_mode,
+            quote_ccy="EUR",
+            max_exposure_quote=per_asset_caps,
+            enable_market_orders=True,
+            max_order_quote=float(st.session_state.get("live_max_order_quote", 50.0) or 0.0),
+            max_retries=3,
+        )
+
 trader: PortfolioSimulatorTrader = st.session_state.trader
+
 
 
 # ----------------------------
 # Session state dicts
 # ----------------------------
-if "engines" not in st.session_state:
-    st.session_state.engines = {}
-if "regime_state" not in st.session_state:
-    st.session_state.regime_state = {}
-if "portfolio_peak_eq" not in st.session_state:
-    st.session_state.portfolio_peak_eq = None
+if s_live('engines') not in st.session_state:
+    st.session_state[s_live('engines')] = {}
+if s_live('regime_state') not in st.session_state:
+    st.session_state[s_live('regime_state')] = {}
+if s_live('portfolio_peak_eq') not in st.session_state:
+    st.session_state[s_live('portfolio_peak_eq')] = None
 if "dd_hist" not in st.session_state:
     st.session_state.dd_hist = []  # list of drawdown_pct floats
 if "eq_hist" not in st.session_state:
     st.session_state.eq_hist = []  # list of equity floats
-if "portfolio_stop_active" not in st.session_state:
-    st.session_state.portfolio_stop_active = False
-if "asset_halt" not in st.session_state:
-    st.session_state.asset_halt = set()  # base assets halted due to stop
-if "pair_paused" not in st.session_state:
-    st.session_state.pair_paused = set()  # symbols paused manually (no trading)
-if "last_bar_ts" not in st.session_state:
-    st.session_state.last_bar_ts = {}  # symbol -> last processed closed bar timestamp
+if s_live('portfolio_stop_active') not in st.session_state:
+    st.session_state[s_live('portfolio_stop_active')] = False
+if s_live('asset_halt') not in st.session_state:
+    st.session_state[s_live('asset_halt')] = set()  # base assets halted due to stop
+if s_live('pair_paused') not in st.session_state:
+    st.session_state[s_live('pair_paused')] = set()  # symbols paused manually (no trading)
+if s_live('last_bar_ts') not in st.session_state:
+    st.session_state[s_live('last_bar_ts')] = {}  # symbol -> last processed closed bar timestamp
 
 
 # --- Interpretable execution log (per pair)
@@ -815,14 +947,14 @@ def compute_metrics(df: pd.DataFrame, price: float) -> Tuple[float, float, float
 
 def apply_hysteresis(symbol: str, raw_regime: str) -> str:
     now = time.time()
-    if symbol not in st.session_state.regime_state:
-        st.session_state.regime_state[symbol] = {
+    if symbol not in st.session_state[s_live('regime_state')]:
+        st.session_state[s_live('regime_state')][symbol] = {
             "hist": deque(maxlen=confirm_n),
             "effective": raw_regime,
             "init_ts": now,
             "last_change": now
         }
-    state = st.session_state.regime_state[symbol]
+    state = st.session_state[s_live('regime_state')][symbol]
     if state["hist"].maxlen != confirm_n:
         state["hist"] = deque(list(state["hist"]), maxlen=confirm_n)
 
@@ -851,7 +983,7 @@ if 'enable_corr_filter' in globals() and enable_corr_filter and len(dfs) >= 2:
         corr_matrix = pd.DataFrame(rets).corr()
 
 def regime_duration_minutes(symbol: str) -> float:
-    state = st.session_state.regime_state.get(symbol)
+    state = st.session_state[s_live('regime_state')].get(symbol)
     if not state:
         return float("nan")
     lc = float(state.get("last_change", 0.0))
@@ -1109,19 +1241,19 @@ if st.session_state.start_equity is None:
 # Execute panic flatten once prices are known (always)
 if st.session_state.get("panic_flatten", False):
     trader.close_all(last_prices, ts_any, reason="PANIC_FLATTEN")
-    for eng in st.session_state.engines.values():
+    for eng in st.session_state[s_live('engines')].values():
         eng.reset_open_cycles()
     st.session_state.panic_flatten = False
-    st.session_state.portfolio_stop_active = True
+    st.session_state[s_live('portfolio_stop_active')] = True
     st.session_state.trading_enabled = False  # auto-pause after panic
 
 # Peak equity / drawdown
-if st.session_state.portfolio_peak_eq is None:
-    st.session_state.portfolio_peak_eq = eq
+if st.session_state[s_live('portfolio_peak_eq')] is None:
+    st.session_state[s_live('portfolio_peak_eq')] = eq
 else:
-    st.session_state.portfolio_peak_eq = max(st.session_state.portfolio_peak_eq, eq)
+    st.session_state[s_live('portfolio_peak_eq')] = max(st.session_state[s_live('portfolio_peak_eq')], eq)
 
-peak = st.session_state.portfolio_peak_eq or eq
+peak = st.session_state[s_live('portfolio_peak_eq')] or eq
 dd = (peak - eq) / peak if peak > 0 else 0.0
 
 # --- Equity / drawdown debug metrics
@@ -1156,7 +1288,7 @@ except Exception:
 # Portfolio drawdown stop (auto-pause)
 portfolio_stop_triggered = False
 if enable_portfolio_dd and (dd * 100.0) >= max_dd_pct:
-    st.session_state.portfolio_stop_active = True
+    st.session_state[s_live('portfolio_stop_active')] = True
     st.session_state.trading_enabled = False  # auto-pause on portfolio stop
     portfolio_stop_triggered = True
 
@@ -1185,7 +1317,7 @@ if enable_asset_stop:
 # Execute stop actions
 if portfolio_stop_triggered and dd_action_flatten:
     trader.close_all(last_prices, ts_any, reason="STOPLOSS_PORTFOLIO")
-    for eng in st.session_state.engines.values():
+    for eng in st.session_state[s_live('engines')].values():
         eng.reset_open_cycles()
 
 if asset_stops_triggered:
@@ -1194,12 +1326,12 @@ if asset_stops_triggered:
         if amt <= 1e-12:
             continue
         trader.sell(sym, px, amt, last_ts_map.get(sym, ts_any), reason="STOPLOSS_ASSET")
-        st.session_state.asset_halt.add(base)
-        if sym in st.session_state.engines:
-            st.session_state.engines[sym].reset_open_cycles()
+        st.session_state[s_live('asset_halt')].add(base)
+        if sym in st.session_state[s_live('engines')]:
+            st.session_state[s_live('engines')][sym].reset_open_cycles()
 
 # If portfolio stop active: disallow new buys globally
-global_allow_buys = not st.session_state.portfolio_stop_active
+global_allow_buys = not st.session_state[s_live('portfolio_stop_active')]
 
 
 # --- BUY guard: portfolio-level pre-trade filters ---
@@ -1249,7 +1381,7 @@ pair_summaries = {}
 for sym, df in dfs.items():
     price = last_prices[sym]
     ts = last_ts_map[sym]
-    cfg = st.session_state.pair_cfg[sym]
+    cfg = st.session_state[s_live('pair_cfg')][sym]
 
     # --- BB mean-reversion state (for buy-filter) ---
     try:
@@ -1309,8 +1441,8 @@ for sym, df in dfs.items():
         if amt > 1e-12:
             trader.sell(sym, float(price), amt, ts, reason='REGIME_REBUILD_FLATTEN')
         # reset cycles; grid will be rebuilt via signature change below
-        if sym in st.session_state.engines:
-            st.session_state.engines[sym].reset_open_cycles()
+        if sym in st.session_state[s_live('engines')]:
+            st.session_state[s_live('engines')][sym].reset_open_cycles()
     if cfg["dynamic_spacing"] and eff_regime != "WARMUP":
         if eff_regime == "TREND":
             range_mult = cfg["k_range"]
@@ -1365,11 +1497,11 @@ for sym, df in dfs.items():
     )
     need_rebuild = False
     rebuild_reason = 'OK'
-    if sym not in st.session_state.engines:
+    if sym not in st.session_state[s_live('engines')]:
         need_rebuild = True
         rebuild_reason = 'INIT'
     else:
-        eng_existing = st.session_state.engines[sym]
+        eng_existing = st.session_state[s_live('engines')][sym]
         prev_sig = getattr(eng_existing, '_cfg_sig', None)
         if prev_sig != cfg_sig:
             need_rebuild = True
@@ -1392,13 +1524,13 @@ for sym, df in dfs.items():
         eng._cfg_sig = cfg_sig
         eng._bounds = (lower, upper)
         eng._last_rebuild_reason = rebuild_reason
-        st.session_state.engines[sym] = eng
+        st.session_state[s_live('engines')][sym] = eng
     else:
         # keep existing grid; keep order_size updated if you tweak it live
-        eng_existing = st.session_state.engines[sym]
+        eng_existing = st.session_state[s_live('engines')][sym]
         eng_existing.order_size = float(cfg.get('order_size', eng_existing.order_size))
 
-    eng: GridEngine = st.session_state.engines[sym]
+    eng: GridEngine = st.session_state[s_live('engines')][sym]
     # --- Range efficiency (hit-rate) ---
     hr = compute_grid_hit_rate(df, grid, window_candles=int(hit_window)) if "hit_window" in globals() else float("nan")
     st.session_state.last_hit_rate[sym] = float(hr)
@@ -1439,9 +1571,9 @@ for sym, df in dfs.items():
             except Exception:
                 trend_block = False
 
-    allow_buys = global_allow_buys and (base not in st.session_state.asset_halt) and (not trend_block)
+    allow_buys = global_allow_buys and (base not in st.session_state[s_live('asset_halt')]) and (not trend_block)
 
-    pair_is_paused = sym in st.session_state.pair_paused
+    pair_is_paused = sym in st.session_state[s_live('pair_paused')]
 
     # --- Interpretable decision snapshot (before execution)
     if sym not in st.session_state.decision_log:
@@ -1458,7 +1590,7 @@ for sym, df in dfs.items():
         reasons.append("PAIR_PAUSED")
     if not global_allow_buys:
         reasons.append("PORTFOLIO_STOP_ACTIVE")
-    if base in st.session_state.asset_halt:
+    if base in st.session_state[s_live('asset_halt')]:
         reasons.append("ASSET_HALT")
     if (base_cap is not None) and (cap_remaining <= 1e-6):
         reasons.append("CAP_REACHED")
@@ -1511,9 +1643,9 @@ for sym, df in dfs.items():
         if len(df) >= 3:
             closed = df.iloc[-2]  # penultimate candle is closed
             bar_ts = closed["timestamp"]
-            prev_bar_ts = st.session_state.last_bar_ts.get(sym)
+            prev_bar_ts = st.session_state[s_live('last_bar_ts')].get(sym)
             if (prev_bar_ts is None) or (bar_ts > prev_bar_ts):
-                st.session_state.last_bar_ts[sym] = bar_ts
+                st.session_state[s_live('last_bar_ts')][sym] = bar_ts
                 o = float(closed["open"]); h = float(closed["high"]); l = float(closed["low"]); c = float(closed["close"])
                 # Intrabar replay: process the last CLOSED candle once per bar to capture level crossings.
                 if bool(cfg.get("intrabar_replay", True)):
@@ -1526,6 +1658,15 @@ for sym, df in dfs.items():
                         if st.session_state.trading_enabled and (not pair_is_paused):
                             eng.check_price(px, trader, bar_ts, allow_buys=allow_buys, buy_guard=buy_guard)
         
+
+    # Buy guard: LIVE per-order cap (quote notional)
+    def buy_guard(symbol: str, amount_base: float, limit_price: float, ts_):
+        if exec_mode.startswith("Live") and st.session_state.get("live_enabled", False):
+            cap = float(st.session_state.get("live_max_order_quote", 0.0) or 0.0)
+            if cap > 0 and (float(limit_price) * float(amount_base)) > cap + 1e-9:
+                return False, "LIVE_ORDER_CAP"
+        return True, "OK"
+
         eng.check_price(price, trader, ts, allow_buys=allow_buys, buy_guard=buy_guard)
 
     # --- Range efficiency & streaks ---
@@ -1560,7 +1701,7 @@ for sym, df in dfs.items():
         "avg_entry": trader.avg_entry_price(base),
         "closed_pnl": sum(c["pnl"] for c in eng.closed_cycles),
         "trades": len(eng.trades),
-        "halted": base in st.session_state.asset_halt,
+        "halted": base in st.session_state[s_live('asset_halt')],
         "trend_blocked": bool(trend_block),
         "trend_ret_pct": trend_ret_pct,
         "paused": pair_is_paused,
@@ -1587,8 +1728,8 @@ with st.expander("Drawdown history (last points)", expanded=False):
     else:
         st.caption("No history yet.")
 
-if st.session_state.asset_halt:
-    st.warning(f"Asset halt active (no new buys): {', '.join(sorted(st.session_state.asset_halt))}")
+if st.session_state[s_live('asset_halt')]:
+    st.warning(f"Asset halt active (no new buys): {', '.join(sorted(st.session_state[s_live('asset_halt')]))}")
 
 summary_df = pd.DataFrame([{"symbol": k, **v} for k, v in pair_summaries.items()])
 if (not summary_df.empty) and ("symbol" in summary_df.columns):
@@ -1654,24 +1795,24 @@ for i, sym in enumerate(dfs.keys()):
     with tabs[i]:
         df = dfs[sym]
         price = last_prices[sym]
-        if sym not in st.session_state.engines:
+        if sym not in st.session_state[s_live('engines')]:
             st.warning("Engine not initialized for this pair (data/initialization issue).")
             continue
 
-        eng: GridEngine = st.session_state.engines[sym]
+        eng: GridEngine = st.session_state[s_live('engines')][sym]
         grid = eng.grid
         base = sym.split("/")[0]
 
         # --- Per-pair pause / resume ---
         p1, p2, p3 = st.columns([1, 1, 2])
-        is_paused = sym in st.session_state.pair_paused
+        is_paused = sym in st.session_state[s_live('pair_paused')]
         with p1:
             if st.button("⏸ Pause pair", key=f"pause_{sym}", disabled=is_paused, width="stretch"):
-                st.session_state.pair_paused.add(sym)
+                st.session_state[s_live('pair_paused')].add(sym)
                 st.rerun()
         with p2:
             if st.button("▶ Resume pair", key=f"resume_{sym}", disabled=(not is_paused), width="stretch"):
-                st.session_state.pair_paused.discard(sym)
+                st.session_state[s_live('pair_paused')].discard(sym)
                 st.rerun()
         with p3:
             pair_state = "PAUSED" if is_paused else "ACTIVE"
@@ -1690,7 +1831,7 @@ for i, sym in enumerate(dfs.keys()):
                 st.write("grid_min/max:", gmin, gmax, "grid_step:", gstep)
                 st.write("next_buy(<price):", next_buy, "next_sell(>price):", next_sell)
                 st.write("bounds:", bounds, "last_rebuild_reason:", getattr(eng, "_last_rebuild_reason", "OK"))
-                st.write("allow_buys:", bool(allow_buys), "pair_paused:", bool(is_paused), "portfolio_stop:", bool(st.session_state.portfolio_stop_active), "asset_halt:", (base in st.session_state.asset_halt))
+                st.write("allow_buys:", bool(allow_buys), "pair_paused:", bool(is_paused), "portfolio_stop:", bool(st.session_state[s_live('portfolio_stop_active')]), "asset_halt:", (base in st.session_state[s_live('asset_halt')]))
                 st.write("trades_logged:", len(getattr(eng, "trades", [])), "open_cycles:", len(getattr(eng, "open_cycles", dict())))
                 st.write("active_buys:", len(getattr(eng, "active_buys", set())), "active_sells:", len(getattr(eng, "active_sells", set())))
 
