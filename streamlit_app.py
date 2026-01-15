@@ -346,6 +346,8 @@ if isinstance(active_bundle, dict) and isinstance(active_bundle.get("profiles"),
 
 
 
+
+        cfg_store[sym_u] = normalize_cfg(sym_u, cfg_store.get(sym_u, {}))
 # ----------------------------
 # Fees & slippage
 # ----------------------------
@@ -626,12 +628,55 @@ def default_cfg(sym: str):
         "dyn_os_max_mult": 1.50,
     }
 
+def normalize_cfg(sym: str, cfg: dict) -> dict:
+    """Ensure per-pair cfg has all required keys; fill missing with defaults."""
+    d = default_cfg(sym)
+    if cfg is None:
+        return d
+    # Backward-compat: accept legacy key names
+    if "gridType" in cfg and "grid_type" not in cfg:
+        cfg["grid_type"] = cfg.get("gridType")
+    # Merge: defaults first, then cfg overrides
+    merged = {**d, **cfg}
+    # Normalize types/values
+    gt = str(merged.get("grid_type", "Linear"))
+    merged["grid_type"] = "Fibonacci" if gt.lower().startswith("fib") else "Linear"
+    try:
+        merged["base_range_pct"] = float(merged.get("base_range_pct", d["base_range_pct"]))
+    except Exception:
+        merged["base_range_pct"] = float(d["base_range_pct"])
+    try:
+        merged["dynamic_spacing"] = bool(merged.get("dynamic_spacing", d["dynamic_spacing"]))
+    except Exception:
+        merged["dynamic_spacing"] = bool(d["dynamic_spacing"])
+    try:
+        merged["k_range"] = float(merged.get("k_range", d["k_range"]))
+    except Exception:
+        merged["k_range"] = float(d["k_range"])
+    try:
+        merged["k_levels"] = float(merged.get("k_levels", d["k_levels"]))
+    except Exception:
+        merged["k_levels"] = float(d["k_levels"])
+    try:
+        merged["base_levels"] = int(merged.get("base_levels", d["base_levels"]))
+    except Exception:
+        merged["base_levels"] = int(d["base_levels"])
+    try:
+        merged["order_size"] = float(merged.get("order_size", d["order_size"]))
+    except Exception:
+        merged["order_size"] = float(d["order_size"])
+    return merged
+
+
 for sym in symbols:
     if sym not in st.session_state[s_live('pair_cfg')]:
         st.session_state[s_live('pair_cfg')][sym] = default_cfg(sym)
     cfg = st.session_state[s_live('pair_cfg')][sym]
 
-    # --- BB mean-reversion state (for buy-filter) ---
+    
+    cfg = normalize_cfg(sym, cfg)
+    st.session_state[s_live('pair_cfg')][sym] = cfg
+# --- BB mean-reversion state (for buy-filter) ---
     try:
         if bool(cfg.get("bb_mr_enable", False)):
             w = int(cfg.get("bb_mr_window", 20))
