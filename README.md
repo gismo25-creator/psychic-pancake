@@ -21,3 +21,11 @@ Safety notes:
 ### Extra Live safeties
 - **Arm STOP & FLATTEN**: required to allow market sells from the panic button in Live mode.
 - **Live max order notional (EUR)**: hard cap per order (price*amount) for Live orders.
+
+### Live account visibility
+When Live mode is enabled, the Live page shows a **Bitvavo account (LIVE)** panel with balances and open orders (cached/backoff).
+
+### Live account snapshot controls
+- **Fetch account snapshot**: manual refresh of balances + open orders.
+- **Auto-refresh account snapshot**: refresh snapshot every page refresh (OFF by default).
+- **Show only relevant assets**: filter balances to EUR + base assets from selected pairs.

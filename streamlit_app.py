@@ -19,6 +19,11 @@ STATE_NS_LIVE = "live"
 
 def s_live(key: str) -> str:
     return f"{STATE_NS_LIVE}:{key}"
+
+# Ensure namespaced live state containers exist
+st.session_state.setdefault(s_live("pair_cfg"), {})
+st.session_state.setdefault(s_live("pair_cfg_source"), {})  # sym -> "bundle"/"user"
+
 import plotly.graph_objects as go
 from streamlit_autorefresh import st_autorefresh
 
@@ -320,6 +325,24 @@ st.session_state['dryrun_allowed'] = bool(dryrun_allowed)
 st.session_state['active_bundle'] = active_bundle
 
 
+# Apply ACTIVE bundle profiles into per-pair settings (Live/Dry-run)
+# - only if user hasn't customized this symbol in the current session
+if isinstance(active_bundle, dict) and isinstance(active_bundle.get("profiles"), dict):
+    profiles = active_bundle.get("profiles") or {}
+    cfg_store = st.session_state.setdefault(s_live("pair_cfg"), {})
+    src_store = st.session_state.setdefault(s_live("pair_cfg_source"), {})
+    for sym, cfg in profiles.items():
+        sym_u = str(sym).upper()
+        if not isinstance(cfg, dict):
+            continue
+        # Only overwrite if not user-modified
+        if src_store.get(sym_u) == "user":
+            continue
+        cfg_store.setdefault(sym_u, {})
+        cfg_store[sym_u].update(cfg)
+        src_store[sym_u] = "bundle"
+
+
 
 
 
@@ -463,6 +486,14 @@ st.sidebar.caption("Gebruik de Profile Manager pagina voor diff/validatie en app
 
 st.sidebar.subheader("Per-pair grid settings")
 
+st.sidebar.caption("Tip: klik hieronder om je huidige Live instellingen als 'user overrides' vast te zetten (zodat een ACTIVE bundle ze niet overschrijft tijdens de sessie).")
+if st.sidebar.button("Mark current pair settings as overrides", width="stretch"):
+    src_store = st.session_state.setdefault(s_live("pair_cfg_source"), {})
+    cfg_store = st.session_state.setdefault(s_live("pair_cfg"), {})
+    for _sym in list(cfg_store.keys()):
+        src_store[str(_sym).upper()] = "user"
+    st.sidebar.success("Marked current settings as user overrides for this session.")
+
 st.sidebar.subheader("Profiles import/export")
 
 # --- Import profiles.json safely (avoid rerun loops)
@@ -491,7 +522,7 @@ if uploaded is not None:
                 if not isinstance(cfg_blob, dict):
                     raise ValueError("profiles.json moet een dict zijn, bijv. {'BTC/EUR': {...}, 'ETH/EUR': {...}}")
 
-                st.session_state.setdefault("pair_cfg", {})
+                st.session_state.setdefault(s_live("pair_cfg"), {})
                 for sym, blob in cfg_blob.items():
                     sym_u = str(sym).upper()
                     st.session_state[s_live('pair_cfg')].setdefault(sym_u, {})
@@ -512,7 +543,7 @@ if st.sidebar.button("Apply BEST profiles from Trainer", width="stretch"):
     trained_best = st.session_state.get("trained_profiles_best")
     trained = trained_best if isinstance(trained_best, dict) and trained_best else st.session_state.get("trained_profiles")
     if isinstance(trained, dict) and trained:
-        st.session_state.setdefault("pair_cfg", {})
+        st.session_state.setdefault(s_live("pair_cfg"), {})
         for sym, blob in trained.items():
             sym_u = str(sym).upper()
             st.session_state[s_live('pair_cfg')].setdefault(sym_u, {}).update(blob)
@@ -523,7 +554,7 @@ if st.sidebar.button("Apply BEST profiles from Trainer", width="stretch"):
 if st.sidebar.button("Apply optimized profiles from Trainer", width="stretch"):
     trained = st.session_state.get("trained_profiles")
     if isinstance(trained, dict) and trained:
-        st.session_state.setdefault("pair_cfg", {})
+        st.session_state.setdefault(s_live("pair_cfg"), {})
         for sym, blob in trained.items():
             sym_u = str(sym).upper()
             st.session_state[s_live('pair_cfg')].setdefault(sym_u, {}).update(blob)
@@ -1727,6 +1758,129 @@ with st.expander("Drawdown history (last points)", expanded=False):
         st.line_chart(st.session_state.dd_hist, height=140)
     else:
         st.caption("No history yet.")
+
+
+# --- Bitvavo LIVE account snapshot (balances + open orders)
+if exec_mode.startswith("Live") and st.session_state.get("live_enabled", False):
+    st.subheader("Bitvavo account (LIVE)")
+
+    if "acc_last_balance" not in st.session_state:
+        st.session_state["acc_last_balance"] = None
+    if "acc_last_open_orders" not in st.session_state:
+        st.session_state["acc_last_open_orders"] = None
+    st.caption("Balances and open orders are fetched via authenticated API with caching/backoff. Open orders may be empty because Live executor v1 uses MARKET orders.")
+
+    # Account snapshot controls
+    acc_only_relevant = st.checkbox(
+        "Show only relevant assets (EUR + bases from selected pairs)",
+        value=bool(st.session_state.get("acc_only_relevant", True)),
+        key="acc_only_relevant",
+    )
+    acc_auto_refresh = st.checkbox(
+        "Auto-refresh account snapshot (on page refresh)",
+        value=bool(st.session_state.get("acc_auto_refresh", False)),
+        help="When OFF, balances/open orders stay cached until you click 'Fetch account snapshot'.",
+        key="acc_auto_refresh",
+    )
+    acc_fetch = st.button(
+        "Fetch account snapshot",
+        help="Fetch balances + open orders now (uses caching/backoff).",
+        key="acc_fetch_now",
+        width="content",
+    )
+
+    cA, cB = st.columns([1, 1])
+
+    # Balances
+    with cA:
+        try:
+            # Fetch balances only when requested, otherwise show cached snapshot
+            do_fetch = bool(st.session_state.get("acc_auto_refresh", False)) or bool(st.session_state.get("acc_fetch_now", False))
+            bal = None
+            if hasattr(trader, "get_balances"):
+                if do_fetch or st.session_state.get("acc_last_balance") is None:
+                    bal = trader.get_balances()
+                    st.session_state["acc_last_balance"] = bal
+                else:
+                    bal = st.session_state.get("acc_last_balance")
+            else:
+                bal = None
+            if not bal:
+                st.info("No balance data available.")
+            else:
+                free = (bal.get("free", {}) or {})
+                used = (bal.get("used", {}) or {})
+                total = (bal.get("total", {}) or {})
+
+                want_assets = set([quote_ccy])
+                for sym in symbols:
+                    want_assets.add(sym.split("/")[0].upper())
+
+                rows = []
+                for asset, tot in total.items():
+                    try:
+                        t = float(tot or 0.0)
+                    except Exception:
+                        continue
+                    if (bool(st.session_state.get("acc_only_relevant", True)) and asset.upper() in want_assets) or (not bool(st.session_state.get("acc_only_relevant", True))):
+                        rows.append({
+                            "asset": asset.upper(),
+                            "free": float(free.get(asset, 0.0) or 0.0),
+                            "used": float(used.get(asset, 0.0) or 0.0),
+                            "total": t,
+                        })
+                if rows:
+                    bdf = pd.DataFrame(rows).sort_values("asset")
+                    st.dataframe(bdf, width="stretch", height=260)
+                else:
+                    st.info("No balances to display.")
+        except BitvavoRateLimitBanned as e:
+            st.error(f"Rate-limit ban active (errorCode 105). Ban until: {e.ban_until_ms} (ms since epoch).")
+        except Exception as e:
+            st.error(f"Failed to fetch balances: {e}")
+
+    # Open orders
+    with cB:
+        try:
+            do_fetch = bool(st.session_state.get("acc_auto_refresh", False)) or bool(st.session_state.get("acc_fetch_now", False))
+            orders = []
+            if hasattr(trader, "list_open_orders"):
+                if do_fetch or st.session_state.get("acc_last_open_orders") is None:
+                    orders = trader.list_open_orders(symbols=symbols)
+                    st.session_state["acc_last_open_orders"] = orders
+                else:
+                    orders = st.session_state.get("acc_last_open_orders") or []
+            else:
+                orders = []
+            if not orders:
+                st.info("No open orders.")
+            else:
+                rows = []
+                for o in orders:
+                    try:
+                        rows.append({
+                            "symbol": o.get("symbol"),
+                            "side": o.get("side"),
+                            "type": o.get("type"),
+                            "status": o.get("status"),
+                            "price": o.get("price"),
+                            "amount": o.get("amount"),
+                            "filled": o.get("filled"),
+                            "remaining": o.get("remaining"),
+                            "time": o.get("datetime") or o.get("timestamp"),
+                            "id": o.get("id"),
+                        })
+                    except Exception:
+                        continue
+                odf = pd.DataFrame(rows)
+                if "symbol" in odf.columns:
+                    odf = odf.sort_values(["symbol"])
+                st.dataframe(odf, width="stretch", height=260)
+        except BitvavoRateLimitBanned as e:
+            st.error(f"Rate-limit ban active (errorCode 105). Ban until: {e.ban_until_ms} (ms since epoch).")
+        except Exception as e:
+            st.error(f"Failed to fetch open orders: {e}")
+
 
 if st.session_state[s_live('asset_halt')]:
     st.warning(f"Asset halt active (no new buys): {', '.join(sorted(st.session_state[s_live('asset_halt')]))}")

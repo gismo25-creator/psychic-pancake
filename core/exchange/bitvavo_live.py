@@ -108,6 +108,9 @@ class BitvavoLiveTrader:
         self.cash: float = 0.0  # quote currency
         self._basis: Dict[str, _CostBasis] = {}  # base -> cost basis
         self._balance_cache = None
+        self._orders_cache = None
+        self._orders_cache_ts = 0.0
+        self._orders_ttl = 5.0
         self._balance_cache_ts = 0.0
         self._balance_ttl_s = 5.0
 
@@ -209,6 +212,42 @@ class BitvavoLiveTrader:
         self._balance_cache = bal
         self._balance_cache_ts = now
         return bal
+
+
+    def _fetch_open_orders_cached(self, symbols: Optional[list[str]] = None):
+        """Fetch open orders (cached). Best-effort: try bulk, fallback per symbol."""
+        now = time.time()
+        if self._orders_cache is not None and (now - self._orders_cache_ts) <= float(self._orders_ttl or 0.0):
+            return self._orders_cache
+
+        orders = []
+        # Try bulk fetch first (may be unsupported by some ccxt exchanges)
+        try:
+            orders = self._with_backoff(self.exchange.fetch_open_orders)
+        except Exception:
+            orders = []
+
+        if (not orders) and symbols:
+            # Fallback: fetch per symbol
+            for sym in symbols:
+                try:
+                    oo = self._with_backoff(self.exchange.fetch_open_orders, sym)
+                    if oo:
+                        orders.extend(list(oo))
+                except Exception:
+                    continue
+
+        self._orders_cache = orders
+        self._orders_cache_ts = now
+        return orders
+
+    def get_balances(self):
+        """Return latest cached balance dict from ccxt."""
+        return self._fetch_balance_cached()
+
+    def list_open_orders(self, symbols: Optional[list[str]] = None):
+        """Return list of open orders (ccxt unified format)."""
+        return self._fetch_open_orders_cached(symbols=symbols)
 
     def _sync_balances(self):
         bal = self._fetch_balance_cached()
