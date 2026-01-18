@@ -48,7 +48,7 @@ from core.grid.engine import GridEngine
 from core.exchange.simulator import PortfolioSimulatorTrader
 from core.exchange.bitvavo_live import BitvavoLiveTrader, BitvavoRateLimitBanned
 
-from core.ml.volatility import atr, realized_vol, bollinger_bandwidth, adx, vol_cluster_acf1
+from core.ml.volatility import atr, realized_vol, bollinger_bandwidth, adx, rsi, vol_cluster_acf1
 from core.ml.regime import classify_regime
 
 from core.profiles.registry import active_path, load_bundle, validate_bundle
@@ -462,6 +462,7 @@ atr_mult = st.sidebar.slider(
 # Regime stability
 # ----------------------------
 st.sidebar.subheader("Regime stability")
+
 cooldown_s = st.sidebar.slider("Cooldown (seconds)", 0, 3600, 300, step=30)
 confirm_n = st.sidebar.slider("Confirmations required", 1, 10, 3)
 # ----------------------------
@@ -626,6 +627,8 @@ def default_cfg(sym: str):
         "enable_dyn_os_mult": False,
         "dyn_os_min_mult": 0.30,
         "dyn_os_max_mult": 1.50,
+        "rsi_mr_enable": False,
+        "rsi_mr_thr": 35.0,
     }
 
 def normalize_cfg(sym: str, cfg: dict) -> dict:
@@ -666,6 +669,7 @@ def normalize_cfg(sym: str, cfg: dict) -> dict:
     except Exception:
         merged["order_size"] = float(d["order_size"])
     return merged
+
 
 
 for sym in symbols:
@@ -1001,12 +1005,13 @@ def compute_returns(df: pd.DataFrame) -> pd.Series:
     s = pd.Series(df["close"]).astype(float)
     return (s.apply(lambda x: math.log(x)).diff()).dropna()
 
-def compute_metrics(df: pd.DataFrame, price: float) -> Tuple[float, float, float, float, float, str]:
+def compute_metrics(df: pd.DataFrame, price: float) -> Tuple[float, float, float, float, float, float, str]:
     dfm = df.copy()
     dfm["atr"] = atr(dfm, 14)
     dfm["rv"] = realized_vol(dfm, 30)
     dfm["bb"] = bollinger_bandwidth(dfm, 20, 2.0)
     dfm["adx"] = adx(dfm, 14)
+    dfm["rsi"] = rsi(dfm, 14)
 
     def last_val(col):
         v = float(dfm[col].iloc[-1])
@@ -1016,9 +1021,10 @@ def compute_metrics(df: pd.DataFrame, price: float) -> Tuple[float, float, float
     rv_val = last_val("rv")
     bb_val = last_val("bb")
     adx_val = last_val("adx")
+    rsi_val = last_val("rsi")
     atr_pct = (atr_val / price) if not math.isnan(atr_val) else float("nan")
     regime = classify_regime(dfm, atr_pct, rv_val, bb_val, adx_val)
-    return atr_val, atr_pct, rv_val, bb_val, adx_val, regime
+    return atr_val, atr_pct, rv_val, bb_val, adx_val, rsi_val, regime
 
 
 def apply_hysteresis(symbol: str, raw_regime: str) -> str:
@@ -1381,7 +1387,7 @@ if enable_asset_stop:
             continue
 
         stop_by_pct = px <= avg_entry * (1.0 - asset_stop_pct / 100.0)
-        atr_val, _, _, _, _, _ = compute_metrics(dfs[sym], px)
+        atr_val, _, _, _, _, _, _ = compute_metrics(dfs[sym], px)
         atr_abs[sym] = atr_val
         stop_by_atr = False
         if use_atr_stop and not math.isnan(atr_val):
@@ -1491,7 +1497,7 @@ for sym, df in dfs.items():
         # clamps
         eff_order_size = max(float(min_order_size), min(float(max_order_size), float(eff_order_size)))
 
-    atr_val, atr_pct, rv_val, bb_val, adx_val, raw_regime = compute_metrics(df, price)
+    atr_val, atr_pct, rv_val, bb_val, adx_val, rsi_val, raw_regime = compute_metrics(df, price)
     atr_abs[sym] = atr_val
     eff_regime = apply_hysteresis(sym, raw_regime)
     # --- Apply regime profile (interpretable, rule-based)
@@ -1649,6 +1655,12 @@ for sym, df in dfs.items():
 
     allow_buys = global_allow_buys and (base not in st.session_state[s_live('asset_halt')]) and (not trend_block)
 
+    # RSI buy-filter (mean reversion): only allow BUY when RSI <= threshold
+    rsi_ok = True
+    if bool(cfg.get("rsi_mr_enable", False)) and (not math.isnan(rsi_val)):
+        rsi_ok = float(rsi_val) <= float(cfg.get("rsi_mr_thr", 35.0))
+    allow_buys = allow_buys and rsi_ok
+
     pair_is_paused = sym in st.session_state[s_live('pair_paused')]
 
     # --- Interpretable decision snapshot (before execution)
@@ -1732,7 +1744,12 @@ for sym, df in dfs.items():
                         pts = (o, l, h, c)
                     for px in pts:
                         if st.session_state.trading_enabled and (not pair_is_paused):
-                            eng.check_price(px, trader, bar_ts, allow_buys=allow_buys, buy_guard=buy_guard)
+                            guard_ctx = {
+                                "rsi_enable": bool(cfg.get("rsi_mr_enable", False)),
+                                "rsi_buy_threshold": float(cfg.get("rsi_mr_thr", 35.0)) if rsi_enable else None,
+                                "rsi": float(rsi_val) if not math.isnan(rsi_val) else None,
+                            }
+                            eng.check_price(px, trader, bar_ts, allow_buys=allow_buys, buy_guard=guard_ctx)
         
 
     # Buy guard: LIVE per-order cap (quote notional)
@@ -1743,7 +1760,12 @@ for sym, df in dfs.items():
                 return False, "LIVE_ORDER_CAP"
         return True, "OK"
 
-        eng.check_price(price, trader, ts, allow_buys=allow_buys, buy_guard=buy_guard)
+        guard_ctx = {
+            "rsi_enable": bool(cfg.get("rsi_mr_enable", False)),
+            "rsi_buy_threshold": float(cfg.get("rsi_mr_thr", 35.0)) if rsi_enable else None,
+            "rsi": float(rsi_val) if not math.isnan(rsi_val) else None,
+        }
+        eng.check_price(price, trader, ts, allow_buys=allow_buys, buy_guard=guard_ctx)
 
     # --- Range efficiency & streaks ---
     pnls = [c.get('pnl', 0.0) for c in eng.closed_cycles]

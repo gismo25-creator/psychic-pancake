@@ -1,0 +1,155 @@
+{
+  "schema_version": 1,
+  "created_at": "2026-01-16T21:10:50.073606+00:00",
+  "meta": {
+    "mode": "PER_SYMBOL",
+    "symbols": [
+      "ETH/EUR"
+    ],
+    "timeframe": "15m",
+    "lookback_days": 90,
+    "folds": 4,
+    "test_window_days": 14,
+    "step_days": 14,
+    "min_train_days": 30,
+    "max_evals_per_regime": 150,
+    "restarts": 6,
+    "rng_seed": 1337,
+    "fees": {
+      "maker": 0.001,
+      "taker": 0.0025,
+      "slippage": 9.999999999999996e-05,
+      "mode": "maker"
+    },
+    "git_commit": "",
+    "data_hashes": {},
+    "gates": {
+      "require_positive_test_pnl": true,
+      "min_worst_fold_test_pnl": 0.0,
+      "min_test_trades_per_fold": 20,
+      "min_test_trades_avg": 23,
+      "max_test_dd_cap_pct": 8.0
+    },
+    "gates_passed": false,
+    "gates_failed": [
+      "NEG_TEST_PNL_AVG",
+      "MIN_TRADES_AVG",
+      "WORST_FOLD_PNL"
+    ],
+    "trainer_report_rows": [
+      {
+        "symbol": "ETH/EUR",
+        "status": "OK",
+        "train_total_pnl": -0.004186126291756409,
+        "train_max_dd_pct": 3.0874345847311613,
+        "train_win_rate_pct": 68.85245901639344,
+        "train_trades": 256,
+        "bb_mr_enable": true,
+        "bb_mr_window": 20,
+        "bb_mr_z": 0.75,
+        "trend_guard_enable": true,
+        "trend_lookback": 48,
+        "trend_down_thresh_pct": 1.0,
+        "enable_time_stop": true,
+        "time_stop_hours": 12.0,
+        "time_stop_mode": "BREAK_EVEN_NET",
+        "time_stop_tp_floor_pct": 0.25,
+        "test_score_avg": -21.991532257750116,
+        "test_score_med": -9.224708784557276,
+        "test_total_pnl_avg": -17.97784961356038,
+        "test_max_dd_pct_avg": 4.0136826441897355,
+        "folds_used": 4
+      }
+    ],
+    "trainer_fold_rows": [
+      {
+        "symbol": "ETH/EUR",
+        "fold": 1,
+        "train_start": "2025-10-18 21:00:00+00:00",
+        "train_end": "2025-11-02 22:45:00+00:00",
+        "test_start": "2025-11-02 22:45:00+00:00",
+        "test_end": "2025-11-16 22:45:00+00:00",
+        "test_total_pnl": -64.94577867358021,
+        "test_max_dd_pct": 6.882792179316459,
+        "test_score": -71.82857085289666,
+        "test_trades": 24,
+        "test_win_rate_pct": 50.0
+      },
+      {
+        "symbol": "ETH/EUR",
+        "fold": 2,
+        "train_start": "2025-10-18 21:00:00+00:00",
+        "train_end": "2025-11-16 22:45:00+00:00",
+        "test_start": "2025-11-16 22:45:00+00:00",
+        "test_end": "2025-11-30 22:45:00+00:00",
+        "test_total_pnl": -3.085592573141639,
+        "test_max_dd_pct": 4.8148106797184145,
+        "test_score": -7.900403252860054,
+        "test_trades": 110,
+        "test_win_rate_pct": 61.224489795918366
+      },
+      {
+        "symbol": "ETH/EUR",
+        "fold": 3,
+        "train_start": "2025-10-31 22:45:00+00:00",
+        "train_end": "2025-11-30 22:45:00+00:00",
+        "test_start": "2025-11-30 22:45:00+00:00",
+        "test_end": "2025-12-14 22:45:00+00:00",
+        "test_total_pnl": 4.8756828097746165,
+        "test_max_dd_pct": 2.563823418763863,
+        "test_score": 2.3118593910107537,
+        "test_trades": 135,
+        "test_win_rate_pct": 81.25
+      },
+      {
+        "symbol": "ETH/EUR",
+        "fold": 4,
+        "train_start": "2025-11-14 22:45:00+00:00",
+        "train_end": "2025-12-14 22:45:00+00:00",
+        "test_start": "2025-12-14 22:45:00+00:00",
+        "test_end": "2025-12-28 22:45:00+00:00",
+        "test_total_pnl": -8.755710017294291,
+        "test_max_dd_pct": 1.7933042989602046,
+        "test_score": -10.549014316254496,
+        "test_trades": 36,
+        "test_win_rate_pct": 58.333333333333336
+      }
+    ]
+  },
+  "profiles": {
+    "ETH/EUR": {
+      "use_regime_profiles": true,
+      "regime_profile_rebuild": false,
+      "regime_profiles": {
+        "RANGE": {
+          "range_pct": 2.0,
+          "levels": 12,
+          "order_size_mult": 0.6,
+          "cycle_tp_enable": true,
+          "cycle_tp_pct": 1.0
+        },
+        "TREND": {
+          "range_pct": 0.5,
+          "levels": 10,
+          "order_size_mult": 1.2,
+          "cycle_tp_enable": true,
+          "cycle_tp_pct": 0.6
+        },
+        "CHAOS": {
+          "range_pct": 3.0,
+          "levels": 8,
+          "order_size_mult": 0.6,
+          "cycle_tp_enable": true,
+          "cycle_tp_pct": 0.5
+        },
+        "WARMUP": {
+          "range_pct": 1.0,
+          "levels": 12,
+          "order_size_mult": 0.8,
+          "cycle_tp_enable": false,
+          "cycle_tp_pct": 0.35
+        }
+      }
+    }
+  }
+}

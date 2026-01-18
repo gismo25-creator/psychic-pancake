@@ -107,6 +107,22 @@ with st.sidebar.form("trainer_cfg_form"):
 
     st.sidebar.subheader("Inventory & trend guards (interpretable)")
 
+    # RSI mean-reversion buy-filter (interpretable)
+    st.sidebar.subheader("RSI mean-reversion buy-filter (interpretable)")
+    train_rsi_include = st.sidebar.checkbox(
+        "Include RSI buy-filter in search (small set)",
+        value=False,
+        key="train_rsi_include",
+        help="If enabled, the trainer will also test a simple RSI buy-filter: block BUYs unless RSI <= threshold."
+    )
+    rsi_thr_candidates_str = st.sidebar.text_input(
+        "RSI threshold candidates (comma-separated)",
+        "25,30,35,40",
+        key="train_rsi_thr_candidates",
+        disabled=(not train_rsi_include),
+        help="Used only when RSI filter is enabled. Keep this list small to control runtime."
+    )
+
     # Trend-guard (downtrend): block new BUYs in TREND-down regimes
     trend_guard_enable = st.sidebar.checkbox(
         "Enable TREND downtrend guard (block BUYs)",
@@ -436,6 +452,8 @@ if run:
         order_size_mults=[float(x) for x in os_mult_candidates],
         cycle_tp_enable=[bool(x) for x in cycle_tp_enable],
         cycle_tp_pcts=[float(x) for x in cycle_tp_pcts],
+        rsi_enable=[False, True] if train_rsi_include else [False],
+        rsi_thresholds=[float(x) for x in range_candidates_rsi],
     )
 
     base_cfg = {

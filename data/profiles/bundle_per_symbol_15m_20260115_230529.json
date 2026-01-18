@@ -1,20 +1,20 @@
 {
   "schema_version": 1,
-  "created_at": "2026-01-12T19:46:55.293018+00:00",
+  "created_at": "2026-01-15T23:05:29.261820+00:00",
   "meta": {
     "mode": "PER_SYMBOL",
     "symbols": [
       "BTC/EUR"
     ],
     "timeframe": "15m",
-    "lookback_days": 177,
+    "lookback_days": 90,
     "folds": 4,
     "test_window_days": 14,
     "step_days": 14,
     "min_train_days": 30,
-    "max_evals_per_regime": 150,
+    "max_evals_per_regime": 130,
     "restarts": 6,
-    "rng_seed": 1337,
+    "rng_seed": 1338,
     "fees": {
       "maker": 0.001,
       "taker": 0.0025,
@@ -26,13 +26,12 @@
     "gates": {
       "require_positive_test_pnl": true,
       "min_worst_fold_test_pnl": 0.0,
-      "min_test_trades_per_fold": 20,
-      "min_test_trades_avg": 10,
-      "max_test_dd_cap_pct": 2.0
+      "min_test_trades_per_fold": 30,
+      "min_test_trades_avg": 39,
+      "max_test_dd_cap_pct": 5.0
     },
     "gates_passed": false,
     "gates_failed": [
-      "NEG_TEST_PNL_AVG",
       "MIN_TRADES_AVG",
       "WORST_FOLD_PNL",
       "MIN_TRADES_PER_FOLD"
@@ -41,24 +40,24 @@
       {
         "symbol": "BTC/EUR",
         "status": "OK",
-        "train_total_pnl": -13.195320360188816,
-        "train_max_dd_pct": 4.5494542577508374,
-        "train_win_rate_pct": 71.42857142857143,
-        "train_trades": 180,
+        "train_total_pnl": -8.482271768951705,
+        "train_max_dd_pct": 2.4935342484492358,
+        "train_win_rate_pct": 73.91304347826086,
+        "train_trades": 150,
         "bb_mr_enable": true,
         "bb_mr_window": 20,
-        "bb_mr_z": 0.75,
+        "bb_mr_z": 0.65,
         "trend_guard_enable": true,
         "trend_lookback": 48,
         "trend_down_thresh_pct": 1.0,
         "enable_time_stop": true,
-        "time_stop_hours": 18.0,
-        "time_stop_mode": "BREAK_EVEN_NET",
-        "time_stop_tp_floor_pct": 0.25,
-        "test_score_avg": -3.669521332567253,
-        "test_score_med": 4.984482721241533,
-        "test_total_pnl_avg": -1.730893942663755,
-        "test_max_dd_pct_avg": 1.9386273899034987,
+        "time_stop_hours": 27.0,
+        "time_stop_mode": "DECAY_TO_TP",
+        "time_stop_tp_floor_pct": 0.35,
+        "test_score_avg": 2.5982561019885217,
+        "test_score_med": 7.96397489479425,
+        "test_total_pnl_avg": 3.3798932278922393,
+        "test_max_dd_pct_avg": 0.7816371259037175,
         "folds_used": 4
       }
     ],
@@ -70,11 +69,11 @@
         "train_end": "2025-11-17 19:30:00+00:00",
         "test_start": "2025-11-17 19:30:00+00:00",
         "test_end": "2025-12-01 19:30:00+00:00",
-        "test_total_pnl": -30.497442563576215,
-        "test_max_dd_pct": 6.358733701279458,
-        "test_score": -36.85617626485567,
-        "test_trades": 142,
-        "test_win_rate_pct": 66.15384615384615
+        "test_total_pnl": -23.10570295257685,
+        "test_max_dd_pct": 2.546353596588705,
+        "test_score": -25.652056549165554,
+        "test_trades": 128,
+        "test_win_rate_pct": 67.24137931034483
       },
       {
         "symbol": "BTC/EUR",
@@ -83,9 +82,9 @@
         "train_end": "2025-12-01 19:30:00+00:00",
         "test_start": "2025-12-01 19:30:00+00:00",
         "test_end": "2025-12-15 19:30:00+00:00",
-        "test_total_pnl": 4.927644103728994,
-        "test_max_dd_pct": 0.1788586477016023,
-        "test_score": 4.748785456027392,
+        "test_total_pnl": 5.982284077502754,
+        "test_max_dd_pct": 0.07160143537794027,
+        "test_score": 5.910682642124814,
         "test_trades": 18,
         "test_win_rate_pct": 100.0
       },
@@ -96,11 +95,11 @@
         "train_end": "2025-12-15 19:30:00+00:00",
         "test_start": "2025-12-15 19:30:00+00:00",
         "test_end": "2025-12-29 19:30:00+00:00",
-        "test_total_pnl": 12.939337384211285,
-        "test_max_dd_pct": 0.7302118921076941,
-        "test_score": 12.209125492103592,
-        "test_trades": 98,
-        "test_win_rate_pct": 91.83673469387756
+        "test_total_pnl": 20.431301155137135,
+        "test_max_dd_pct": 0.3141699876059915,
+        "test_score": 20.11713116753114,
+        "test_trades": 96,
+        "test_win_rate_pct": 93.75
       },
       {
         "symbol": "BTC/EUR",
@@ -109,22 +108,13 @@
         "train_end": "2025-12-29 19:30:00+00:00",
         "test_start": "2025-12-29 19:30:00+00:00",
         "test_end": "2026-01-12 19:30:00+00:00",
-        "test_total_pnl": 5.706885304980915,
-        "test_max_dd_pct": 0.48670531852524024,
-        "test_score": 5.220179986455674,
+        "test_total_pnl": 10.211690631505917,
+        "test_max_dd_pct": 0.19442348404223286,
+        "test_score": 10.017267147463684,
         "test_trades": 26,
-        "test_win_rate_pct": 69.23076923076923
+        "test_win_rate_pct": 92.3076923076923
       }
-    ],
-    "sanity_passed": true,
-    "sanity_summary": {
-      "bundle_id": "2026-01-12T19:46:55.293018+00:00::data\\profiles\\bundle_per_symbol_15m_20260112_194655.json",
-      "require_no_errors": true,
-      "n_symbols": 0,
-      "fails": 0,
-      "errors": 0
-    },
-    "sanity_rows": []
+    ]
   },
   "profiles": {
     "BTC/EUR": {
@@ -132,18 +122,18 @@
       "regime_profile_rebuild": false,
       "regime_profiles": {
         "RANGE": {
-          "range_pct": 2.0,
-          "levels": 14,
+          "range_pct": 0.5,
+          "levels": 12,
           "order_size_mult": 0.6,
           "cycle_tp_enable": true,
-          "cycle_tp_pct": 0.8
+          "cycle_tp_pct": 1.0
         },
         "TREND": {
-          "range_pct": 0.5,
-          "levels": 8,
+          "range_pct": 1.0,
+          "levels": 12,
           "order_size_mult": 0.6,
           "cycle_tp_enable": true,
-          "cycle_tp_pct": 0.6
+          "cycle_tp_pct": 1.0
         },
         "CHAOS": {
           "range_pct": 3.0,
@@ -153,11 +143,11 @@
           "cycle_tp_pct": 0.5
         },
         "WARMUP": {
-          "range_pct": 0.5,
-          "levels": 12,
+          "range_pct": 2.0,
+          "levels": 16,
           "order_size_mult": 1.2,
           "cycle_tp_enable": true,
-          "cycle_tp_pct": 0.6
+          "cycle_tp_pct": 0.8
         }
       }
     }
