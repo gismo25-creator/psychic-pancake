@@ -1746,7 +1746,7 @@ for sym, df in dfs.items():
                         if st.session_state.trading_enabled and (not pair_is_paused):
                             guard_ctx = {
                                 "rsi_enable": bool(cfg.get("rsi_mr_enable", False)),
-                                "rsi_buy_threshold": float(cfg.get("rsi_mr_thr", 35.0)) if rsi_enable else None,
+                                "rsi_buy_threshold": float(cfg.get("rsi_mr_thr", 35.0)) if bool(cfg.get("rsi_mr_enable", False)) else None,
                                 "rsi": float(rsi_val) if not math.isnan(rsi_val) else None,
                             }
                             eng.check_price(px, trader, bar_ts, allow_buys=allow_buys, buy_guard=guard_ctx)
@@ -1762,7 +1762,7 @@ for sym, df in dfs.items():
 
         guard_ctx = {
             "rsi_enable": bool(cfg.get("rsi_mr_enable", False)),
-            "rsi_buy_threshold": float(cfg.get("rsi_mr_thr", 35.0)) if rsi_enable else None,
+            "rsi_buy_threshold": float(cfg.get("rsi_mr_thr", 35.0)) if bool(cfg.get("rsi_mr_enable", False)) else None,
             "rsi": float(rsi_val) if not math.isnan(rsi_val) else None,
         }
         eng.check_price(price, trader, ts, allow_buys=allow_buys, buy_guard=guard_ctx)

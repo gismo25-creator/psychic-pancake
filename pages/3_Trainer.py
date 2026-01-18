@@ -123,6 +123,14 @@ with st.sidebar.form("trainer_cfg_form"):
         help="Used only when RSI filter is enabled. Keep this list small to control runtime."
     )
 
+# Parse RSI thresholds (always defined so SearchSpace can reference it)
+try:
+    range_candidates_rsi = [float(x.strip()) for x in str(rsi_thr_candidates_str).split(",") if x.strip()]
+except Exception:
+    range_candidates_rsi = [25.0, 30.0, 35.0, 40.0]
+if not range_candidates_rsi:
+    range_candidates_rsi = [25.0, 30.0, 35.0, 40.0]
+
     # Trend-guard (downtrend): block new BUYs in TREND-down regimes
     trend_guard_enable = st.sidebar.checkbox(
         "Enable TREND downtrend guard (block BUYs)",
