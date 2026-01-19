@@ -19,6 +19,7 @@ def _git_commit() -> str:
     except Exception:
         return ""
 
+run = False  # set default; overwritten by button
 st.set_page_config(layout="wide")
 st.title("Trainer – Offline tuning (interpretable profiles + multi-fold walk-forward)")
 
@@ -289,7 +290,7 @@ if not range_candidates_rsi:
         help="Limits the number of candidate evaluations per regime (keeps training bounded)."
     )
 
-    run = st.form_submit_button("▶ Train (multi-fold WF)", use_container_width=True)
+    run = st.sidebar.button("▶ Train (multi-fold WF)", use_container_width=True)
 
 if "trained_profiles" not in st.session_state:
     st.session_state.trained_profiles = None
