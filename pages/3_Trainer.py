@@ -4,6 +4,7 @@ import os
 import pandas as pd
 import streamlit as st
 
+import time
 from core.profiles.registry import make_bundle, save_bundle, stable_hash_df, ensure_store_dir, list_bundles, load_bundle
 
 from core.backtest.data_store import load_or_fetch
@@ -57,6 +58,7 @@ with st.sidebar.form("trainer_cfg_form"):
 
     st.sidebar.subheader("Base strategy (used by trainer)")
 
+    _ui_mark("base_strategy")
     grid_type = st.sidebar.selectbox("Grid type", ["Linear", "Fibonacci"], index=0)
     base_range_pct = st.sidebar.slider("Base range ± (%)", 0.1, 20.0, 1.0, step=0.1)
     base_levels = None
@@ -66,6 +68,7 @@ with st.sidebar.form("trainer_cfg_form"):
 
     st.sidebar.subheader("Search space (optimizer candidates)")
 
+    _ui_mark("searchspace")
     def _parse_csv_floats(s: str, default: list[float]) -> list[float]:
         try:
             vals = [float(x.strip()) for x in str(s).split(",") if x.strip() != ""]
@@ -108,6 +111,7 @@ with st.sidebar.form("trainer_cfg_form"):
 
     st.sidebar.subheader("Inventory & trend guards (interpretable)")
 
+    _ui_mark("guards")
     # RSI mean-reversion buy-filter (interpretable)
     st.sidebar.subheader("RSI mean-reversion buy-filter (interpretable)")
     train_rsi_include = st.sidebar.checkbox(
@@ -124,13 +128,13 @@ with st.sidebar.form("trainer_cfg_form"):
         help="Used only when RSI filter is enabled. Keep this list small to control runtime."
     )
 
-# Parse RSI thresholds (always defined so SearchSpace can reference it)
-try:
-    range_candidates_rsi = [float(x.strip()) for x in str(rsi_thr_candidates_str).split(",") if x.strip()]
-except Exception:
-    range_candidates_rsi = [25.0, 30.0, 35.0, 40.0]
-if not range_candidates_rsi:
-    range_candidates_rsi = [25.0, 30.0, 35.0, 40.0]
+    # Parse RSI thresholds (always defined so SearchSpace can reference it)
+    try:
+        range_candidates_rsi = [float(x.strip()) for x in str(rsi_thr_candidates_str).split(",") if x.strip()]
+    except Exception:
+        range_candidates_rsi = [25.0, 30.0, 35.0, 40.0]
+    if not range_candidates_rsi:
+        range_candidates_rsi = [25.0, 30.0, 35.0, 40.0]
 
     # Trend-guard (downtrend): block new BUYs in TREND-down regimes
     trend_guard_enable = st.sidebar.checkbox(
@@ -291,6 +295,38 @@ if not range_candidates_rsi:
     )
 
     run = st.sidebar.button("▶ Train (multi-fold WF)", use_container_width=True)
+
+
+    _ui_mark("run_button")
+# --- Sidebar sanity-check (helps detect indentation/scope issues) ---
+if "trainer_ui_sanity" not in st.session_state:
+    st.session_state.trainer_ui_sanity = {"markers": [], "ts": time.time()}
+
+def _ui_mark(label: str):
+    try:
+        st.session_state.trainer_ui_sanity["markers"].append(label)
+        st.session_state.trainer_ui_sanity["ts"] = time.time()
+    except Exception:
+        pass
+
+with st.sidebar.expander("UI sanity-check", expanded=False):
+    st.caption("Quick diagnostics to confirm the sidebar was fully built.")
+    st.checkbox("Show debug details", value=False, key="trainer_ui_sanity_show")
+    if st.session_state.get("trainer_ui_sanity_show", False):
+        st.write({
+            "markers_count": len(st.session_state.trainer_ui_sanity.get("markers", [])),
+            "markers_tail": st.session_state.trainer_ui_sanity.get("markers", [])[-12:],
+            "last_update_epoch": st.session_state.trainer_ui_sanity.get("ts", None),
+        })
+    expected = {"market", "fees", "base_strategy", "searchspace", "guards", "scoring", "run_button"}
+    seen = set(st.session_state.trainer_ui_sanity.get("markers", []))
+    ok = expected.issubset(seen)
+    st.write("Status:", "PASS" if ok else "WARN")
+    if not ok:
+        missing = sorted(list(expected - seen))
+        st.warning(f"Missing markers: {', '.join(missing)} (sidebar may have been interrupted by indentation/scope issues).")
+
+
 
 if "trained_profiles" not in st.session_state:
     st.session_state.trained_profiles = None
