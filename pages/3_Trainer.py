@@ -32,6 +32,18 @@ st.info(
 # ----------------------------
 # Sidebar
 # ----------------------------
+
+# --- UI marker helpers (used by sidebar sanity-check) ---
+if "trainer_ui_sanity" not in st.session_state:
+    st.session_state.trainer_ui_sanity = {"markers": [], "ts": time.time()}
+
+def _ui_mark(label: str):
+    try:
+        st.session_state.trainer_ui_sanity["markers"].append(label)
+        st.session_state.trainer_ui_sanity["ts"] = time.time()
+    except Exception:
+        pass
+
 with st.sidebar.form("trainer_cfg_form"):
     st.sidebar.subheader("Data")
     symbols = st.sidebar.multiselect(
