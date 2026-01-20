@@ -166,7 +166,8 @@ zones = detect_fvgs(
     require_range_break=bool(require_range_break),
 )
 
-latest: Optional[FVGZone] = pick_latest_zone(zones, direction="BULL")
+eligible_zones = [z for z in zones if z.direction == "BULL" and float(z.zone_high) < price]
+latest: Optional[FVGZone] = pick_latest_zone(eligible_zones, direction="BULL")
 
 # ----------------------------
 # Strategy loop (paper)
@@ -182,6 +183,15 @@ def _entry_from_zone(z: FVGZone) -> float:
 
 def _build_order(z: FVGZone, now_ts: pd.Timestamp, last_px: float) -> Optional[FVGOrder]:
     entry = _entry_from_zone(z)
+    # Eligibility: only place bullish retracement orders if the market is currently ABOVE the gap.
+    # If price is already below the zone, the retrace/mitigation already happened and this setup is invalid.
+    if not (float(last_px) > float(z.zone_high)):
+        return None
+    # Entry must lie inside the zone and below current price (non-marketable limit).
+    if not (float(z.zone_low) <= float(entry) <= float(z.zone_high)):
+        return None
+    if not (float(entry) < float(last_px)):
+        return None
     # Long-only spot
     sl = float(z.c1_low) - float(sl_buffer_atr) * float(z.atr)
     if not (sl < entry < last_px * 10):
@@ -244,6 +254,16 @@ if run_enabled:
         acct.on_candle(symbol, c)
         last_processed[symbol] = pd.Timestamp(c["timestamp"])
 
+
+    # If market is already below the pending bullish zone, the retrace/mitigation likely happened via a gap.
+    # In this candle-based simulator a pending LIMIT might not fill on a gap-down (high < entry), so we cancel it
+    # to avoid "stale" orders sitting far above the market.
+    o = acct.open_orders.get(symbol)
+    if o is not None and o.status == "PENDING":
+        if float(price) < float(o.zone_low):
+            acct.cancel_order(symbol, reason="INVALIDATED_BELOW_ZONE")
+            o = None
+
     # expire pending order
     o = acct.open_orders.get(symbol)
     if o is not None and o.status == "PENDING":
@@ -289,9 +309,9 @@ with right:
     else:
         st.json(o.to_dict())
 
-    st.subheader("Latest bullish FVG (detected)")
+    st.subheader("Latest eligible bullish FVG (below price)")
     if latest is None:
-        st.warning("No bullish FVG found with current thresholds.")
+        st.warning("No eligible bullish FVG found (must be below current price).")
     else:
         st.write(
             {
