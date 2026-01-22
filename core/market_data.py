@@ -43,7 +43,7 @@ def _extract_ban_until_ms(msg: str) -> Optional[int]:
 
 def fetch_ohlcv_bitvavo(symbol: str, timeframe: str = "5m", limit: int = 300) -> pd.DataFrame:
     """Fetch OHLCV via CCXT. Raises BitvavoRateLimitBan on Bitvavo errorCode 105 bans."""
-    exchange = ccxt.bitvavo({"enableRateLimit": True})
+    exchange = _public_exchange_bitvavo()
     try:
         ohlcv = exchange.fetch_ohlcv(symbol, timeframe=timeframe, limit=limit)
     except Exception as e:
@@ -59,9 +59,56 @@ def fetch_ohlcv_bitvavo(symbol: str, timeframe: str = "5m", limit: int = 300) ->
     return df
 
 
+
+# ----------------------------
+# Bitvavo CCXT singleton (public)
+# ----------------------------
+_PUBLIC_EXCHANGE = None
+
+def _public_exchange_bitvavo():
+    """Reuse one CCXT Bitvavo instance for public endpoints to reduce overhead and rate-limit pressure."""
+    global _PUBLIC_EXCHANGE
+    if _PUBLIC_EXCHANGE is None:
+        _PUBLIC_EXCHANGE = ccxt.bitvavo({"enableRateLimit": True})
+    return _PUBLIC_EXCHANGE
+
+def fetch_markets_bitvavo(quote: str = "EUR") -> list[dict]:
+    """Fetch Bitvavo markets via CCXT and return unified market dicts."""
+    ex = _public_exchange_bitvavo()
+    markets = ex.load_markets()
+    out = []
+    for sym, m in markets.items():
+        try:
+            if quote and str(m.get("quote")).upper() != quote.upper():
+                continue
+        except Exception:
+            pass
+        out.append(m)
+    return out
+
+def fetch_tickers_bitvavo(symbols: list[str] | None = None) -> dict:
+    """Fetch tickers for symbols (or all if supported). Returns CCXT unified ticker dict keyed by symbol."""
+    ex = _public_exchange_bitvavo()
+    if symbols:
+        # CCXT may not support bulk tickers; attempt and fallback to per-symbol.
+        try:
+            if hasattr(ex, "fetch_tickers"):
+                return ex.fetch_tickers(symbols)
+        except Exception:
+            pass
+        res = {}
+        for s in symbols:
+            res[s] = ex.fetch_ticker(s)
+        return res
+    # all
+    if hasattr(ex, "fetch_tickers"):
+        return ex.fetch_tickers()
+    # fallback: no all-tickers support
+    return {}
+
 def fetch_ticker_bitvavo(symbol: str) -> dict:
     """Return a lightweight ticker dict: {'last','bid','ask','timestamp'} using CCXT public endpoints."""
-    exchange = ccxt.bitvavo({"enableRateLimit": True})
+    exchange = _public_exchange_bitvavo()
     try:
         t = exchange.fetch_ticker(symbol)
     except Exception as e:

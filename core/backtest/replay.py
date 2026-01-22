@@ -10,7 +10,7 @@ from core.grid.engine import GridEngine
 from core.grid.linear import generate_linear_grid
 from core.grid.fibonacci import generate_fibonacci_grid
 
-from core.ml.volatility import atr, realized_vol, bollinger_bandwidth, adx, rsi
+from core.ml.volatility import atr, realized_vol, bollinger_bandwidth, adx
 from core.ml.regime import classify_regime
 
 
@@ -223,8 +223,6 @@ def run_backtest(
 
         # BB mean-reversion buy-filter: only allow BUYs when limit_price is sufficiently below BB mid.
         bb_enable = bool((profile or {}).get("bb_mr_enable", cfg.get("bb_mr_enable", False)))
-        rsi_enable = bool((profile or {}).get("rsi_mr_enable", cfg.get("rsi_mr_enable", False)))
-        rsi_thr = float((profile or {}).get("rsi_mr_thr", cfg.get("rsi_mr_thr", 35.0)))
         bb_thr = float((profile or {}).get("bb_mr_z", cfg.get("bb_mr_z", 0.75)))
         def _buy_guard(symbol: str, amount_base: float, limit_price: float, ts_inner):
             if bb_enable and bb_thr > 0:
@@ -235,13 +233,6 @@ def run_backtest(
                         z = (float(limit_price) - mid) / std
                         if z > -bb_thr:
                             return False, f"BB_MR_BLOCK: z={z:.2f} > -{bb_thr:.2f}"
-                except Exception:
-                    pass
-            if rsi_enable and rsi_thr > 0:
-                try:
-                    r = float(d["_rsi"].iloc[idx])
-                    if (not pd.isna(r)) and r > float(rsi_thr):
-                        return False, f"RSI_MR_BLOCK: rsi={r:.1f} > {rsi_thr:.1f}"
                 except Exception:
                     pass
             return True, "OK"

@@ -70,19 +70,3 @@ def vol_cluster_acf1(df, window: int = 120) -> float:
     if x.std() == 0 or y.std() == 0:
         return float("nan")
     return float(x.corr(y))
-
-
-def rsi(df: pd.DataFrame, period: int = 14) -> pd.Series:
-    """Relative Strength Index (RSI) using Wilder-style smoothing (EMA alpha=1/period)."""
-    close = df["close"].astype(float)
-    delta = close.diff()
-    gain = delta.clip(lower=0.0)
-    loss = (-delta).clip(lower=0.0)
-
-    avg_gain = gain.ewm(alpha=1.0/period, adjust=False, min_periods=period).mean()
-    avg_loss = loss.ewm(alpha=1.0/period, adjust=False, min_periods=period).mean()
-
-    rs = avg_gain / (avg_loss.replace(0.0, np.nan))
-    out = 100.0 - (100.0 / (1.0 + rs))
-    return out
-

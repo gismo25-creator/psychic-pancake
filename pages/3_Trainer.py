@@ -4,7 +4,6 @@ import os
 import pandas as pd
 import streamlit as st
 
-import time
 from core.profiles.registry import make_bundle, save_bundle, stable_hash_df, ensure_store_dir, list_bundles, load_bundle
 
 from core.backtest.data_store import load_or_fetch
@@ -20,7 +19,6 @@ def _git_commit() -> str:
     except Exception:
         return ""
 
-run = False  # set default; overwritten by button
 st.set_page_config(layout="wide")
 st.title("Trainer – Offline tuning (interpretable profiles + multi-fold walk-forward)")
 
@@ -32,18 +30,6 @@ st.info(
 # ----------------------------
 # Sidebar
 # ----------------------------
-
-# --- UI marker helpers (used by sidebar sanity-check) ---
-if "trainer_ui_sanity" not in st.session_state:
-    st.session_state.trainer_ui_sanity = {"markers": [], "ts": time.time()}
-
-def _ui_mark(label: str):
-    try:
-        st.session_state.trainer_ui_sanity["markers"].append(label)
-        st.session_state.trainer_ui_sanity["ts"] = time.time()
-    except Exception:
-        pass
-
 with st.sidebar.form("trainer_cfg_form"):
     st.sidebar.subheader("Data")
     symbols = st.sidebar.multiselect(
@@ -70,7 +56,6 @@ with st.sidebar.form("trainer_cfg_form"):
 
     st.sidebar.subheader("Base strategy (used by trainer)")
 
-    _ui_mark("base_strategy")
     grid_type = st.sidebar.selectbox("Grid type", ["Linear", "Fibonacci"], index=0)
     base_range_pct = st.sidebar.slider("Base range ± (%)", 0.1, 20.0, 1.0, step=0.1)
     base_levels = None
@@ -80,7 +65,6 @@ with st.sidebar.form("trainer_cfg_form"):
 
     st.sidebar.subheader("Search space (optimizer candidates)")
 
-    _ui_mark("searchspace")
     def _parse_csv_floats(s: str, default: list[float]) -> list[float]:
         try:
             vals = [float(x.strip()) for x in str(s).split(",") if x.strip() != ""]
@@ -122,31 +106,6 @@ with st.sidebar.form("trainer_cfg_form"):
     bb_mr_z = st.sidebar.slider("Z-threshold (buy only if z <= -thr)", 0.0, 3.0, 0.75, step=0.05)
 
     st.sidebar.subheader("Inventory & trend guards (interpretable)")
-
-    _ui_mark("guards")
-    # RSI mean-reversion buy-filter (interpretable)
-    st.sidebar.subheader("RSI mean-reversion buy-filter (interpretable)")
-    train_rsi_include = st.sidebar.checkbox(
-        "Include RSI buy-filter in search (small set)",
-        value=False,
-        key="train_rsi_include",
-        help="If enabled, the trainer will also test a simple RSI buy-filter: block BUYs unless RSI <= threshold."
-    )
-    rsi_thr_candidates_str = st.sidebar.text_input(
-        "RSI threshold candidates (comma-separated)",
-        "25,30,35,40",
-        key="train_rsi_thr_candidates",
-        disabled=(not train_rsi_include),
-        help="Used only when RSI filter is enabled. Keep this list small to control runtime."
-    )
-
-    # Parse RSI thresholds (always defined so SearchSpace can reference it)
-    try:
-        range_candidates_rsi = [float(x.strip()) for x in str(rsi_thr_candidates_str).split(",") if x.strip()]
-    except Exception:
-        range_candidates_rsi = [25.0, 30.0, 35.0, 40.0]
-    if not range_candidates_rsi:
-        range_candidates_rsi = [25.0, 30.0, 35.0, 40.0]
 
     # Trend-guard (downtrend): block new BUYs in TREND-down regimes
     trend_guard_enable = st.sidebar.checkbox(
@@ -306,39 +265,7 @@ with st.sidebar.form("trainer_cfg_form"):
         help="Limits the number of candidate evaluations per regime (keeps training bounded)."
     )
 
-    run = st.sidebar.button("▶ Train (multi-fold WF)", use_container_width=True)
-
-
-    _ui_mark("run_button")
-# --- Sidebar sanity-check (helps detect indentation/scope issues) ---
-if "trainer_ui_sanity" not in st.session_state:
-    st.session_state.trainer_ui_sanity = {"markers": [], "ts": time.time()}
-
-def _ui_mark(label: str):
-    try:
-        st.session_state.trainer_ui_sanity["markers"].append(label)
-        st.session_state.trainer_ui_sanity["ts"] = time.time()
-    except Exception:
-        pass
-
-with st.sidebar.expander("UI sanity-check", expanded=False):
-    st.caption("Quick diagnostics to confirm the sidebar was fully built.")
-    st.checkbox("Show debug details", value=False, key="trainer_ui_sanity_show")
-    if st.session_state.get("trainer_ui_sanity_show", False):
-        st.write({
-            "markers_count": len(st.session_state.trainer_ui_sanity.get("markers", [])),
-            "markers_tail": st.session_state.trainer_ui_sanity.get("markers", [])[-12:],
-            "last_update_epoch": st.session_state.trainer_ui_sanity.get("ts", None),
-        })
-    expected = {"market", "fees", "base_strategy", "searchspace", "guards", "scoring", "run_button"}
-    seen = set(st.session_state.trainer_ui_sanity.get("markers", []))
-    ok = expected.issubset(seen)
-    st.write("Status:", "PASS" if ok else "WARN")
-    if not ok:
-        missing = sorted(list(expected - seen))
-        st.warning(f"Missing markers: {', '.join(missing)} (sidebar may have been interrupted by indentation/scope issues).")
-
-
+    run = st.form_submit_button("▶ Train (multi-fold WF)", use_container_width=True)
 
 if "trained_profiles" not in st.session_state:
     st.session_state.trained_profiles = None
@@ -509,8 +436,6 @@ if run:
         order_size_mults=[float(x) for x in os_mult_candidates],
         cycle_tp_enable=[bool(x) for x in cycle_tp_enable],
         cycle_tp_pcts=[float(x) for x in cycle_tp_pcts],
-        rsi_enable=[False, True] if train_rsi_include else [False],
-        rsi_thresholds=[float(x) for x in range_candidates_rsi],
     )
 
     base_cfg = {

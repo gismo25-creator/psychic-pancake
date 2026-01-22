@@ -134,13 +134,6 @@ if run:
         cooldown_candles=int(cooldown_candles),
         rebuild_on_regime_change=bool(rebuild_on_change),
     )
-
-    # Persist results so widgets/dropdowns don't wipe the page on rerun
-    st.session_state.bt_results = {
-        "trades_df": trades_df,
-        "equity_curve": equity_curve,
-        "decision_log": decision_log,
-    }
     # Rendering moved below to persist results across reruns
 
 

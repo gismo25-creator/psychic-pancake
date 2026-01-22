@@ -20,8 +20,6 @@ class SearchSpace:
     order_size_mults: List[float]
     cycle_tp_enable: List[bool]
     cycle_tp_pcts: List[float]
-    rsi_enable: List[bool]
-    rsi_thresholds: List[float]
 
 
 def _num_trades(summ: Dict) -> float:
@@ -45,31 +43,23 @@ def objective_from_summary(
     return total_pnl - dd_term - trade_term
 
 
-
 def _candidate_tuples(
     base_cfg: Dict,
     best_reg_profile: Dict,
     search: SearchSpace,
-) -> Tuple[List[Tuple[float, Optional[int], float, bool, float, bool, float]], int]:
+) -> Tuple[List[Tuple[float, Optional[int], float, bool, float]], int]:
     levels_iter = search.levels if base_cfg.get("grid_type", "Linear") == "Linear" else [None]
-    tuples: List[Tuple[float, Optional[int], float, bool, float, bool, float]] = []
+    tuples: List[Tuple[float, Optional[int], float, bool, float]] = []
     for r_pct in search.range_pcts:
         for lv in levels_iter:
             for osm in search.order_size_mults:
-                for rsi_en in search.rsi_enable:
-                    for rsi_thr in search.rsi_thresholds:
-                        for ctp_en in search.cycle_tp_enable:
-                            if ctp_en:
-                                for ctp in search.cycle_tp_pcts:
-                                    tuples.append(
-                                        (float(r_pct), None if lv is None else int(lv), float(osm), True, float(ctp), bool(rsi_en), float(rsi_thr))
-                                    )
-                            else:
-                                tuples.append(
-                                    (float(r_pct), None if lv is None else int(lv), float(osm), False, float(best_reg_profile.get("cycle_tp_pct", 0.35)), bool(rsi_en), float(rsi_thr))
-                                )
+                for ctp_en in search.cycle_tp_enable:
+                    if ctp_en:
+                        for ctp in search.cycle_tp_pcts:
+                            tuples.append((float(r_pct), None if lv is None else int(lv), float(osm), True, float(ctp)))
+                    else:
+                        tuples.append((float(r_pct), None if lv is None else int(lv), float(osm), False, float(best_reg_profile.get("cycle_tp_pct", 0.35))))
     return tuples, len(tuples)
-
 
 
 def staged_optimize_regime_profiles(
@@ -156,7 +146,7 @@ def staged_optimize_regime_profiles(
             order = order[:take]
 
         for idx, oi in enumerate(order, start=1):
-            r_pct, lv, osm, ctp_en, ctp, rsi_en, rsi_thr = cand_list[oi]
+            r_pct, lv, osm, ctp_en, ctp = cand_list[oi]
             cand = dict(best_reg_profile)
             cand["range_pct"] = float(r_pct)
             if lv is not None:
@@ -164,8 +154,6 @@ def staged_optimize_regime_profiles(
             cand["order_size_mult"] = float(osm)
             cand["cycle_tp_enable"] = bool(ctp_en)
             cand["cycle_tp_pct"] = float(ctp)
-            cand["rsi_mr_enable"] = bool(rsi_en)
-            cand["rsi_mr_thr"] = float(rsi_thr)
 
             tmp_profiles = {k: dict(v) for k, v in current.items()}
             tmp_profiles[reg] = cand
