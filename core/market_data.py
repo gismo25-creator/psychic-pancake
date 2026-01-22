@@ -87,22 +87,42 @@ def fetch_markets_bitvavo(quote: str = "EUR") -> list[dict]:
     return out
 
 def fetch_tickers_bitvavo(symbols: list[str] | None = None) -> dict:
-    """Fetch tickers for symbols (or all if supported). Returns CCXT unified ticker dict keyed by symbol."""
+    """Fetch tickers for symbols (or all if supported).
+
+    Returns CCXT unified ticker dict keyed by symbol. Raises BitvavoRateLimitBan on Bitvavo errorCode 105 bans.
+    """
     ex = _public_exchange_bitvavo()
+
+    def _handle_exc(e: Exception):
+        msg = str(e)
+        until = _extract_ban_until_ms(msg)
+        if until is not None:
+            raise BitvavoRateLimitBan(banned_until_ms=until, message=msg) from e
+        raise e
+
     if symbols:
         # CCXT may not support bulk tickers; attempt and fallback to per-symbol.
         try:
             if hasattr(ex, "fetch_tickers"):
                 return ex.fetch_tickers(symbols)
-        except Exception:
-            pass
+        except Exception as e:
+            _handle_exc(e)
+
         res = {}
         for s in symbols:
-            res[s] = ex.fetch_ticker(s)
+            try:
+                res[s] = ex.fetch_ticker(s)
+            except Exception as e:
+                _handle_exc(e)
         return res
+
     # all
     if hasattr(ex, "fetch_tickers"):
-        return ex.fetch_tickers()
+        try:
+            return ex.fetch_tickers()
+        except Exception as e:
+            _handle_exc(e)
+
     # fallback: no all-tickers support
     return {}
 
@@ -128,6 +148,25 @@ def fetch_ticker_bitvavo(symbol: str) -> dict:
 
 
 # ----------------------------
+
+# ----------------------------
+# Cached wrappers for heavier public calls
+# ----------------------------
+if st is not None:
+    @st.cache_data(ttl=600, show_spinner=False)
+    def fetch_markets_bitvavo_cached(quote: str = "EUR") -> list[dict]:
+        return fetch_markets_bitvavo(quote=quote)
+
+    @st.cache_data(ttl=30, show_spinner=False)
+    def fetch_tickers_bitvavo_cached(symbols: list[str] | None = None) -> dict:
+        return fetch_tickers_bitvavo(symbols=symbols)
+else:
+    def fetch_markets_bitvavo_cached(quote: str = "EUR") -> list[dict]:  # type: ignore
+        return fetch_markets_bitvavo(quote=quote)
+
+    def fetch_tickers_bitvavo_cached(symbols: list[str] | None = None) -> dict:  # type: ignore
+        return fetch_tickers_bitvavo(symbols=symbols)
+
 # Streamlit-friendly cached wrappers
 # ----------------------------
 if st is not None:

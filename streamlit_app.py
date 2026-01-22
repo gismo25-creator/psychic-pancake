@@ -19,11 +19,6 @@ STATE_NS_LIVE = "live"
 
 def s_live(key: str) -> str:
     return f"{STATE_NS_LIVE}:{key}"
-
-# Ensure namespaced live state containers exist
-st.session_state.setdefault(s_live("pair_cfg"), {})
-st.session_state.setdefault(s_live("pair_cfg_source"), {})  # sym -> "bundle"/"user"
-
 import plotly.graph_objects as go
 from streamlit_autorefresh import st_autorefresh
 
@@ -48,7 +43,7 @@ from core.grid.engine import GridEngine
 from core.exchange.simulator import PortfolioSimulatorTrader
 from core.exchange.bitvavo_live import BitvavoLiveTrader, BitvavoRateLimitBanned
 
-from core.ml.volatility import atr, realized_vol, bollinger_bandwidth, adx, rsi, vol_cluster_acf1
+from core.ml.volatility import atr, realized_vol, bollinger_bandwidth, adx, vol_cluster_acf1
 from core.ml.regime import classify_regime
 
 from core.profiles.registry import active_path, load_bundle, validate_bundle
@@ -270,10 +265,22 @@ else:
 # Market selection
 # ----------------------------
 st.sidebar.subheader("Market")
-symbols_input = st.sidebar.text_input("Pairs (comma-separated)", "BTC/EUR, ETH/EUR")
+symbols_input = st.sidebar.text_input("Pairs (comma-separated)", st.session_state.get(k_live("symbols_input"), "BTC/EUR, ETH/EUR"), key=k_live("symbols_input"))
 symbols = [s.strip().upper() for s in symbols_input.split(",") if s.strip()]
 if not symbols:
     st.stop()
+
+
+# --- Bot manager (per-pair enable/disable) ---
+if "bot_enabled" not in st.session_state:
+    st.session_state.bot_enabled = {}
+for _s in symbols:
+    st.session_state.bot_enabled.setdefault(_s, True)
+
+st.sidebar.subheader("Bots")
+st.sidebar.caption("Per pair aan/uit zonder je hele app te stoppen. (Global START/STOP blijft leidend.)")
+for _s in symbols:
+    st.session_state.bot_enabled[_s] = st.sidebar.checkbox(f"Enable {_s}", value=bool(st.session_state.bot_enabled.get(_s, True)), key=k_live(f"bot_en::{_s}"))
 
 timeframe = st.sidebar.selectbox("Timeframe", ["1m", "5m", "15m"], index=1)
 
@@ -281,6 +288,9 @@ refresh = st.sidebar.slider("Refresh sec", 5, 60, 15)
 st_autorefresh(interval=refresh * 1000, key=k_live("refresh"))
 # --- Execution mode (no real orders are ever sent from this app unless live executor is added)
 st.sidebar.subheader("Execution mode")
+if len(symbols) > 1:
+    st.sidebar.info("Meerdere bots tegelijk = meer API-calls. Gebruik caching/backoff en houd refresh ≥ 30–60s.")
+
 exec_mode = st.sidebar.selectbox(
     "Mode",
     ["Simulation (paper, candle close)", "Dry-run Live (paper, ticker mid)", "Live (Bitvavo, real orders)"],
@@ -325,29 +335,9 @@ st.session_state['dryrun_allowed'] = bool(dryrun_allowed)
 st.session_state['active_bundle'] = active_bundle
 
 
-# Apply ACTIVE bundle profiles into per-pair settings (Live/Dry-run)
-# - only if user hasn't customized this symbol in the current session
-if isinstance(active_bundle, dict) and isinstance(active_bundle.get("profiles"), dict):
-    profiles = active_bundle.get("profiles") or {}
-    cfg_store = st.session_state.setdefault(s_live("pair_cfg"), {})
-    src_store = st.session_state.setdefault(s_live("pair_cfg_source"), {})
-    for sym, cfg in profiles.items():
-        sym_u = str(sym).upper()
-        if not isinstance(cfg, dict):
-            continue
-        # Only overwrite if not user-modified
-        if src_store.get(sym_u) == "user":
-            continue
-        cfg_store.setdefault(sym_u, {})
-        cfg_store[sym_u].update(cfg)
-        src_store[sym_u] = "bundle"
 
 
 
-
-
-
-        cfg_store[sym_u] = normalize_cfg(sym_u, cfg_store.get(sym_u, {}))
 # ----------------------------
 # Fees & slippage
 # ----------------------------
@@ -462,7 +452,6 @@ atr_mult = st.sidebar.slider(
 # Regime stability
 # ----------------------------
 st.sidebar.subheader("Regime stability")
-
 cooldown_s = st.sidebar.slider("Cooldown (seconds)", 0, 3600, 300, step=30)
 confirm_n = st.sidebar.slider("Confirmations required", 1, 10, 3)
 # ----------------------------
@@ -488,14 +477,6 @@ st.sidebar.subheader("Governance")
 st.sidebar.caption("Gebruik de Profile Manager pagina voor diff/validatie en apply.")
 
 st.sidebar.subheader("Per-pair grid settings")
-
-st.sidebar.caption("Tip: klik hieronder om je huidige Live instellingen als 'user overrides' vast te zetten (zodat een ACTIVE bundle ze niet overschrijft tijdens de sessie).")
-if st.sidebar.button("Mark current pair settings as overrides", width="stretch"):
-    src_store = st.session_state.setdefault(s_live("pair_cfg_source"), {})
-    cfg_store = st.session_state.setdefault(s_live("pair_cfg"), {})
-    for _sym in list(cfg_store.keys()):
-        src_store[str(_sym).upper()] = "user"
-    st.sidebar.success("Marked current settings as user overrides for this session.")
 
 st.sidebar.subheader("Profiles import/export")
 
@@ -525,7 +506,7 @@ if uploaded is not None:
                 if not isinstance(cfg_blob, dict):
                     raise ValueError("profiles.json moet een dict zijn, bijv. {'BTC/EUR': {...}, 'ETH/EUR': {...}}")
 
-                st.session_state.setdefault(s_live("pair_cfg"), {})
+                st.session_state.setdefault("pair_cfg", {})
                 for sym, blob in cfg_blob.items():
                     sym_u = str(sym).upper()
                     st.session_state[s_live('pair_cfg')].setdefault(sym_u, {})
@@ -546,7 +527,7 @@ if st.sidebar.button("Apply BEST profiles from Trainer", width="stretch"):
     trained_best = st.session_state.get("trained_profiles_best")
     trained = trained_best if isinstance(trained_best, dict) and trained_best else st.session_state.get("trained_profiles")
     if isinstance(trained, dict) and trained:
-        st.session_state.setdefault(s_live("pair_cfg"), {})
+        st.session_state.setdefault("pair_cfg", {})
         for sym, blob in trained.items():
             sym_u = str(sym).upper()
             st.session_state[s_live('pair_cfg')].setdefault(sym_u, {}).update(blob)
@@ -557,7 +538,7 @@ if st.sidebar.button("Apply BEST profiles from Trainer", width="stretch"):
 if st.sidebar.button("Apply optimized profiles from Trainer", width="stretch"):
     trained = st.session_state.get("trained_profiles")
     if isinstance(trained, dict) and trained:
-        st.session_state.setdefault(s_live("pair_cfg"), {})
+        st.session_state.setdefault("pair_cfg", {})
         for sym, blob in trained.items():
             sym_u = str(sym).upper()
             st.session_state[s_live('pair_cfg')].setdefault(sym_u, {}).update(blob)
@@ -627,60 +608,14 @@ def default_cfg(sym: str):
         "enable_dyn_os_mult": False,
         "dyn_os_min_mult": 0.30,
         "dyn_os_max_mult": 1.50,
-        "rsi_mr_enable": False,
-        "rsi_mr_thr": 35.0,
     }
-
-def normalize_cfg(sym: str, cfg: dict) -> dict:
-    """Ensure per-pair cfg has all required keys; fill missing with defaults."""
-    d = default_cfg(sym)
-    if cfg is None:
-        return d
-    # Backward-compat: accept legacy key names
-    if "gridType" in cfg and "grid_type" not in cfg:
-        cfg["grid_type"] = cfg.get("gridType")
-    # Merge: defaults first, then cfg overrides
-    merged = {**d, **cfg}
-    # Normalize types/values
-    gt = str(merged.get("grid_type", "Linear"))
-    merged["grid_type"] = "Fibonacci" if gt.lower().startswith("fib") else "Linear"
-    try:
-        merged["base_range_pct"] = float(merged.get("base_range_pct", d["base_range_pct"]))
-    except Exception:
-        merged["base_range_pct"] = float(d["base_range_pct"])
-    try:
-        merged["dynamic_spacing"] = bool(merged.get("dynamic_spacing", d["dynamic_spacing"]))
-    except Exception:
-        merged["dynamic_spacing"] = bool(d["dynamic_spacing"])
-    try:
-        merged["k_range"] = float(merged.get("k_range", d["k_range"]))
-    except Exception:
-        merged["k_range"] = float(d["k_range"])
-    try:
-        merged["k_levels"] = float(merged.get("k_levels", d["k_levels"]))
-    except Exception:
-        merged["k_levels"] = float(d["k_levels"])
-    try:
-        merged["base_levels"] = int(merged.get("base_levels", d["base_levels"]))
-    except Exception:
-        merged["base_levels"] = int(d["base_levels"])
-    try:
-        merged["order_size"] = float(merged.get("order_size", d["order_size"]))
-    except Exception:
-        merged["order_size"] = float(d["order_size"])
-    return merged
-
-
 
 for sym in symbols:
     if sym not in st.session_state[s_live('pair_cfg')]:
         st.session_state[s_live('pair_cfg')][sym] = default_cfg(sym)
     cfg = st.session_state[s_live('pair_cfg')][sym]
 
-    
-    cfg = normalize_cfg(sym, cfg)
-    st.session_state[s_live('pair_cfg')][sym] = cfg
-# --- BB mean-reversion state (for buy-filter) ---
+    # --- BB mean-reversion state (for buy-filter) ---
     try:
         if bool(cfg.get("bb_mr_enable", False)):
             w = int(cfg.get("bb_mr_window", 20))
@@ -1005,13 +940,12 @@ def compute_returns(df: pd.DataFrame) -> pd.Series:
     s = pd.Series(df["close"]).astype(float)
     return (s.apply(lambda x: math.log(x)).diff()).dropna()
 
-def compute_metrics(df: pd.DataFrame, price: float) -> Tuple[float, float, float, float, float, float, str]:
+def compute_metrics(df: pd.DataFrame, price: float) -> Tuple[float, float, float, float, float, str]:
     dfm = df.copy()
     dfm["atr"] = atr(dfm, 14)
     dfm["rv"] = realized_vol(dfm, 30)
     dfm["bb"] = bollinger_bandwidth(dfm, 20, 2.0)
     dfm["adx"] = adx(dfm, 14)
-    dfm["rsi"] = rsi(dfm, 14)
 
     def last_val(col):
         v = float(dfm[col].iloc[-1])
@@ -1021,10 +955,9 @@ def compute_metrics(df: pd.DataFrame, price: float) -> Tuple[float, float, float
     rv_val = last_val("rv")
     bb_val = last_val("bb")
     adx_val = last_val("adx")
-    rsi_val = last_val("rsi")
     atr_pct = (atr_val / price) if not math.isnan(atr_val) else float("nan")
     regime = classify_regime(dfm, atr_pct, rv_val, bb_val, adx_val)
-    return atr_val, atr_pct, rv_val, bb_val, adx_val, rsi_val, regime
+    return atr_val, atr_pct, rv_val, bb_val, adx_val, regime
 
 
 def apply_hysteresis(symbol: str, raw_regime: str) -> str:
@@ -1387,7 +1320,7 @@ if enable_asset_stop:
             continue
 
         stop_by_pct = px <= avg_entry * (1.0 - asset_stop_pct / 100.0)
-        atr_val, _, _, _, _, _, _ = compute_metrics(dfs[sym], px)
+        atr_val, _, _, _, _, _ = compute_metrics(dfs[sym], px)
         atr_abs[sym] = atr_val
         stop_by_atr = False
         if use_atr_stop and not math.isnan(atr_val):
@@ -1497,7 +1430,7 @@ for sym, df in dfs.items():
         # clamps
         eff_order_size = max(float(min_order_size), min(float(max_order_size), float(eff_order_size)))
 
-    atr_val, atr_pct, rv_val, bb_val, adx_val, rsi_val, raw_regime = compute_metrics(df, price)
+    atr_val, atr_pct, rv_val, bb_val, adx_val, raw_regime = compute_metrics(df, price)
     atr_abs[sym] = atr_val
     eff_regime = apply_hysteresis(sym, raw_regime)
     # --- Apply regime profile (interpretable, rule-based)
@@ -1655,12 +1588,6 @@ for sym, df in dfs.items():
 
     allow_buys = global_allow_buys and (base not in st.session_state[s_live('asset_halt')]) and (not trend_block)
 
-    # RSI buy-filter (mean reversion): only allow BUY when RSI <= threshold
-    rsi_ok = True
-    if bool(cfg.get("rsi_mr_enable", False)) and (not math.isnan(rsi_val)):
-        rsi_ok = float(rsi_val) <= float(cfg.get("rsi_mr_thr", 35.0))
-    allow_buys = allow_buys and rsi_ok
-
     pair_is_paused = sym in st.session_state[s_live('pair_paused')]
 
     # --- Interpretable decision snapshot (before execution)
@@ -1744,12 +1671,7 @@ for sym, df in dfs.items():
                         pts = (o, l, h, c)
                     for px in pts:
                         if st.session_state.trading_enabled and (not pair_is_paused):
-                            guard_ctx = {
-                                "rsi_enable": bool(cfg.get("rsi_mr_enable", False)),
-                                "rsi_buy_threshold": float(cfg.get("rsi_mr_thr", 35.0)) if bool(cfg.get("rsi_mr_enable", False)) else None,
-                                "rsi": float(rsi_val) if not math.isnan(rsi_val) else None,
-                            }
-                            eng.check_price(px, trader, bar_ts, allow_buys=allow_buys, buy_guard=guard_ctx)
+                            eng.check_price(px, trader, bar_ts, allow_buys=allow_buys, buy_guard=buy_guard)
         
 
     # Buy guard: LIVE per-order cap (quote notional)
@@ -1760,12 +1682,7 @@ for sym, df in dfs.items():
                 return False, "LIVE_ORDER_CAP"
         return True, "OK"
 
-        guard_ctx = {
-            "rsi_enable": bool(cfg.get("rsi_mr_enable", False)),
-            "rsi_buy_threshold": float(cfg.get("rsi_mr_thr", 35.0)) if bool(cfg.get("rsi_mr_enable", False)) else None,
-            "rsi": float(rsi_val) if not math.isnan(rsi_val) else None,
-        }
-        eng.check_price(price, trader, ts, allow_buys=allow_buys, buy_guard=guard_ctx)
+        eng.check_price(price, trader, ts, allow_buys=allow_buys, buy_guard=buy_guard)
 
     # --- Range efficiency & streaks ---
     pnls = [c.get('pnl', 0.0) for c in eng.closed_cycles]

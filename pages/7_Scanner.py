@@ -2,7 +2,7 @@ import math
 import pandas as pd
 import streamlit as st
 
-from core.market_data import fetch_markets_bitvavo, fetch_tickers_bitvavo, fetch_ohlcv_bitvavo_cached
+from core.market_data import fetch_markets_bitvavo_cached, fetch_tickers_bitvavo_cached, fetch_ohlcv_bitvavo_cached, BitvavoRateLimitBan
 from core.ml.volatility import atr, realized_vol, bollinger_bandwidth, adx
 
 st.set_page_config(layout="wide")
@@ -20,8 +20,10 @@ with st.sidebar:
     st.subheader("Metrics")
     timeframe = st.selectbox("Timeframe (vol metrics)", ["5m","15m","1h"], index=1)
     ohlcv_limit = st.slider("OHLCV candles", 120, 600, 300, step=30)
-    compute_ohlcv = st.checkbox("Compute ATR/RV/BB/ADX (slower)", value=True)
-    top_for_ohlcv = st.slider("OHLCV for top-N by volume (fast mode)", 10, 200, 60, step=10, disabled=not compute_ohlcv)
+    compute_ohlcv = st.checkbox("Compute ATR/RV/BB/ADX (slower)", value=False, help="Dit doet per symbol een OHLCV call. Zet dit aan voor alleen top-N om rate-limits te vermijden.")
+    top_for_ohlcv = st.slider("OHLCV for top-N by volume (fast mode)", 5, 120, 20, step=10, disabled=not compute_ohlcv)
+    sleep_between_ohlcv = st.slider("Min delay between OHLCV calls (sec)", 0.0, 2.0, 0.25, step=0.05, disabled=not compute_ohlcv)
+    max_ohlcv_calls = st.slider("Hard cap OHLCV calls per run", 5, 120, 25, step=5, disabled=not compute_ohlcv)
     st.subheader("Ranking")
     rank_mode = st.selectbox("Rank by", ["Volume", "Spread", "Volatility (ATR%)", "Grid score"], index=3)
     run = st.button("Run scan", type="primary")
@@ -31,7 +33,7 @@ if not run:
     st.stop()
 
 # Markets
-mkts = fetch_markets_bitvavo(quote=quote)
+mkts = fetch_markets_bitvavo_cached(quote=quote)
 syms = []
 for m in mkts:
     s = m.get("symbol")
@@ -52,7 +54,7 @@ if not syms:
     st.stop()
 
 # Tickers
-tickers = fetch_tickers_bitvavo(syms)
+tickers = fetch_tickers_bitvavo_cached(syms)
 rows = []
 for s in syms:
     t = tickers.get(s) or {}
@@ -93,8 +95,15 @@ df = df.sort_values("quote_volume_24h", ascending=False)
 if compute_ohlcv:
     df_top = df.head(int(top_for_ohlcv)).copy()
     atr_pcts, rv_vals, bb_vals, adx_vals = [], [], [], []
+    ohlcv_calls = 0
     for s in df_top["symbol"].tolist():
         try:
+            if ohlcv_calls >= int(max_ohlcv_calls):
+                raise RuntimeError("OHLCV_CALL_CAP_REACHED")
+            ohlcv_calls += 1
+            if float(sleep_between_ohlcv) > 0:
+                import time as _time
+                _time.sleep(float(sleep_between_ohlcv))
             o = fetch_ohlcv_bitvavo_cached(s, timeframe=timeframe, limit=int(ohlcv_limit))
             px = float(o["close"].iloc[-1])
             o2 = o.copy()
@@ -108,6 +117,14 @@ if compute_ohlcv:
             rv_vals.append(float(o2["rv"].iloc[-1]))
             bb_vals.append(float(o2["bb"].iloc[-1]))
             adx_vals.append(float(o2["adx"].iloc[-1]))
+        except BitvavoRateLimitBan as e:
+            st.error(f"Rate-limit ban door Bitvavo. Wacht tot ban verloopt. Details: {e}")
+            break
+        except RuntimeError as e:
+            if str(e) == "OHLCV_CALL_CAP_REACHED":
+                st.warning("OHLCV call cap bereikt; toon ranking op basis van volume/spread. Verhoog cap of verlaag top-N.")
+                break
+            raise
         except Exception:
             atr_pcts.append(float("nan"))
             rv_vals.append(float("nan"))

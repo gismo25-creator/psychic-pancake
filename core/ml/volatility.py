@@ -1,6 +1,7 @@
 import numpy as np
 import pandas as pd
-#test
+import math
+
 def _true_range(df: pd.DataFrame) -> pd.Series:
     prev_close = df["close"].shift(1)
     tr = pd.concat([
@@ -70,3 +71,22 @@ def vol_cluster_acf1(df, window: int = 120) -> float:
     if x.std() == 0 or y.std() == 0:
         return float("nan")
     return float(x.corr(y))
+def rsi(df: pd.DataFrame, period: int = 14) -> pd.Series:
+    """Relative Strength Index (RSI), Wilder's smoothing via EMA.
+
+    Returns a pd.Series aligned to df.index. Values in [0, 100], NaN until enough history.
+    """
+    if df is None or "close" not in df:
+        return pd.Series(dtype=float)
+    close = pd.Series(df["close"]).astype(float)
+    delta = close.diff()
+    gain = delta.clip(lower=0.0)
+    loss = (-delta).clip(lower=0.0)
+
+    # Wilder EMA: alpha = 1/period
+    avg_gain = gain.ewm(alpha=1.0/period, adjust=False, min_periods=period).mean()
+    avg_loss = loss.ewm(alpha=1.0/period, adjust=False, min_periods=period).mean()
+
+    rs = avg_gain / avg_loss.replace(0.0, np.nan)
+    rsi_val = 100.0 - (100.0 / (1.0 + rs))
+    return rsi_val
