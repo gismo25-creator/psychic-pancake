@@ -1,0 +1,7 @@
+*.csv
+*.csv
+core/__pycache__/__init__.cpython-313.pyc
+core/__pycache__/market_data.cpython-311.pyc
+/core/__pycache__
+/pages/__pycache__
+/.cache/ohlcv

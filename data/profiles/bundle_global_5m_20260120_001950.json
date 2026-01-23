@@ -1,0 +1,99 @@
+{
+  "schema_version": 1,
+  "created_at": "2026-01-20T00:19:50.027798+00:00",
+  "meta": {
+    "mode": "GLOBAL",
+    "symbols": [
+      "XRP/EUR"
+    ],
+    "timeframe": "5m",
+    "lookback_days": 90,
+    "folds": 5,
+    "test_window_days": 14,
+    "step_days": 14,
+    "min_train_days": 71,
+    "max_evals_per_regime": 150,
+    "restarts": 6,
+    "rng_seed": 1336,
+    "fees": {
+      "maker": 0.001,
+      "taker": 0.0025,
+      "slippage": 9.999999999999996e-05,
+      "mode": "maker"
+    },
+    "git_commit": "",
+    "data_hashes": {},
+    "gates": {
+      "require_positive_test_pnl": true,
+      "min_worst_fold_test_pnl": 0.0,
+      "min_test_trades_per_fold": 35,
+      "min_test_trades_avg": 22,
+      "max_test_dd_cap_pct": 9.0
+    },
+    "gates_passed": false,
+    "gates_failed": [
+      "NEG_TEST_PNL_AVG",
+      "DD_CAP"
+    ],
+    "trainer_report_rows": [
+      {
+        "symbol": "GLOBAL",
+        "status": "OK",
+        "primary_symbol": "XRP/EUR",
+        "symbols_used": "XRP/EUR",
+        "test_score_avg": -2.609729537242271,
+        "test_score_med": -2.5345927522606178,
+        "test_total_pnl_avg": -2.1758997190635454,
+        "test_max_dd_worst_pct": 0.8506458722678018,
+        "test_max_dd_avg_pct": 0.43382981817872535,
+        "test_trades_avg": 55.6,
+        "folds_used_total": 5
+      }
+    ],
+    "trainer_fold_rows": []
+  },
+  "profiles": {
+    "XRP/EUR": {
+      "use_regime_profiles": true,
+      "regime_profile_rebuild": false,
+      "regime_profiles": {
+        "RANGE": {
+          "range_pct": 2.0,
+          "levels": 12,
+          "order_size_mult": 0.6,
+          "cycle_tp_enable": true,
+          "cycle_tp_pct": 0.8,
+          "rsi_mr_enable": false,
+          "rsi_mr_thr": 30.0
+        },
+        "TREND": {
+          "range_pct": 2.5,
+          "levels": 12,
+          "order_size_mult": 0.6,
+          "cycle_tp_enable": true,
+          "cycle_tp_pct": 1.2,
+          "rsi_mr_enable": false,
+          "rsi_mr_thr": 25.0
+        },
+        "CHAOS": {
+          "range_pct": 1.0,
+          "levels": 10,
+          "order_size_mult": 0.6,
+          "cycle_tp_enable": true,
+          "cycle_tp_pct": 0.6,
+          "rsi_mr_enable": false,
+          "rsi_mr_thr": 35.0
+        },
+        "WARMUP": {
+          "range_pct": 1.0,
+          "levels": 16,
+          "order_size_mult": 0.6,
+          "cycle_tp_enable": false,
+          "cycle_tp_pct": 0.35,
+          "rsi_mr_enable": false,
+          "rsi_mr_thr": 35.0
+        }
+      }
+    }
+  }
+}

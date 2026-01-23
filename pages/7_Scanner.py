@@ -20,8 +20,16 @@ with st.sidebar:
     st.subheader("Metrics")
     timeframe = st.selectbox("Timeframe (vol metrics)", ["5m","15m","1h"], index=1)
     ohlcv_limit = st.slider("OHLCV candles", 120, 600, 300, step=30)
-    compute_ohlcv = st.checkbox("Compute ATR/RV/BB/ADX (slower)", value=False, help="Dit doet per symbol een OHLCV call. Zet dit aan voor alleen top-N om rate-limits te vermijden.")
-    top_for_ohlcv = st.slider("OHLCV for top-N by volume (fast mode)", 5, 120, 20, step=10, disabled=not compute_ohlcv)
+    st.markdown("**Scan mode**")
+    scan_mode = st.selectbox(
+        "Mode",
+        ["Tickers only (fast)", "Tickers + OHLCV metrics (slower)"],
+        index=0,
+        help="Fast mode uses only tickers (volume/spread). Slower mode adds ATR/RV/BB/ADX and makes OHLCV calls."
+    )
+    top_universe = st.slider("Universe top-N by volume (for shortlist)", 10, 200, 60, step=10)
+    shortlist_size = st.slider("Default shortlist size", 5, 30, 10, step=1)
+    compute_ohlcv = (scan_mode == "Tickers + OHLCV metrics (slower)")
     sleep_between_ohlcv = st.slider("Min delay between OHLCV calls (sec)", 0.0, 2.0, 0.25, step=0.05, disabled=not compute_ohlcv)
     max_ohlcv_calls = st.slider("Hard cap OHLCV calls per run", 5, 120, 25, step=5, disabled=not compute_ohlcv)
     st.subheader("Ranking")
@@ -92,8 +100,37 @@ if df.empty:
 df["quote_volume_24h"] = pd.to_numeric(df["quote_volume_24h"], errors="coerce")
 df = df.sort_values("quote_volume_24h", ascending=False)
 
-if compute_ohlcv:
-    df_top = df.head(int(top_for_ohlcv)).copy()
+# Shortlist selection to limit OHLCV calls (rate-limit friendly)
+df_universe = df.head(int(top_universe)).copy()
+default_short = df_universe["symbol"].head(int(shortlist_size)).tolist()
+shortlist = st.multiselect(
+    "Shortlist (compute OHLCV metrics only for these symbols)",
+    options=df_universe["symbol"].tolist(),
+    default=default_short,
+    help="Kies een shortlist zodat we ATR/ADX/BB alleen voor die paren ophalen (rate-limit vriendelijk)."
+)
+# Export shortlist to Live page pairs input
+LIVE_SYMBOLS_KEY = "live:symbols_input"
+c_exp1, c_exp2 = st.columns([1, 3])
+with c_exp1:
+    if st.button("Export → Live", key="export_shortlist_live", disabled=(not shortlist), help="Zet de shortlist automatisch in de Live pagina (Pairs input)."):
+        st.session_state[LIVE_SYMBOLS_KEY] = ", ".join(shortlist)
+        st.session_state["scanner:last_exported_pairs"] = st.session_state[LIVE_SYMBOLS_KEY]
+        st.success("Shortlist geëxporteerd naar Live → Market → Pairs.")
+        # Optional: jump to Live page (best-effort)
+        try:
+            st.switch_page("streamlit_app.py")
+        except Exception:
+            pass
+with c_exp2:
+    last_exp = st.session_state.get("scanner:last_exported_pairs")
+    if last_exp:
+        st.caption(f"Last export to Live: {last_exp}")
+
+
+
+if compute_ohlcv and shortlist:
+    df_top = df[df["symbol"].isin(shortlist)].copy()
     atr_pcts, rv_vals, bb_vals, adx_vals = [], [], [], []
     ohlcv_calls = 0
     for s in df_top["symbol"].tolist():
@@ -122,7 +159,7 @@ if compute_ohlcv:
             break
         except RuntimeError as e:
             if str(e) == "OHLCV_CALL_CAP_REACHED":
-                st.warning("OHLCV call cap bereikt; toon ranking op basis van volume/spread. Verhoog cap of verlaag top-N.")
+                st.warning("OHLCV call cap bereikt; metrics worden beperkt. Verlaag shortlist of verhoog cap.")
                 break
             raise
         except Exception:
@@ -130,6 +167,7 @@ if compute_ohlcv:
             rv_vals.append(float("nan"))
             bb_vals.append(float("nan"))
             adx_vals.append(float("nan"))
+
     df_top["atr_pct"] = atr_pcts
     df_top["rv"] = rv_vals
     df_top["bb_bw"] = bb_vals
