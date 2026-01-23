@@ -102,6 +102,23 @@ df = df.sort_values("quote_volume_24h", ascending=False)
 
 # Shortlist selection to limit OHLCV calls (rate-limit friendly)
 df_universe = df.head(int(top_universe)).copy()
+# Optional: load symbols from a previously exported CSV (scanner output)
+up = st.file_uploader("Load symbols from Scanner CSV (optional)", type=["csv"], key="scanner_csv_upload")
+csv_symbols = []
+if up is not None:
+    try:
+        _dfu = pd.read_csv(up)
+        for col in ["symbol", "Symbol", "pair", "market"]:
+            if col in _dfu.columns:
+                csv_symbols = [str(x).strip().upper() for x in _dfu[col].dropna().tolist() if str(x).strip()]
+                break
+        if not csv_symbols:
+            st.warning("No symbol column found in CSV. Expected 'symbol'.")
+        else:
+            st.success(f"Loaded {len(csv_symbols)} symbols from CSV.")
+    except Exception as e:
+        st.error(f"CSV read error: {e}")
+
 default_short = df_universe["symbol"].head(int(shortlist_size)).tolist()
 shortlist = st.multiselect(
     "Shortlist (compute OHLCV metrics only for these symbols)",
@@ -111,23 +128,35 @@ shortlist = st.multiselect(
 )
 # Export shortlist to Live page pairs input
 LIVE_SYMBOLS_KEY = "live:symbols_input"
-c_exp1, c_exp2 = st.columns([1, 3])
+pairs_str = ", ".join(shortlist) if shortlist else ""
+c_exp1, c_exp2, c_exp3 = st.columns([1, 1, 2])
 with c_exp1:
     if st.button("Export → Live", key="export_shortlist_live", disabled=(not shortlist), help="Zet de shortlist automatisch in de Live pagina (Pairs input)."):
-        st.session_state[LIVE_SYMBOLS_KEY] = ", ".join(shortlist)
-        st.session_state["scanner:last_exported_pairs"] = st.session_state[LIVE_SYMBOLS_KEY]
+        st.session_state[LIVE_SYMBOLS_KEY] = pairs_str
+        st.session_state["scanner:last_exported_pairs"] = pairs_str
+        st.session_state["scanner:export_pairs_fallback"] = pairs_str
+        # Extra fallback: query params
+        try:
+            st.query_params["pairs"] = pairs_str
+        except Exception:
+            try:
+                st.experimental_set_query_params(pairs=pairs_str)
+            except Exception:
+                pass
         st.success("Shortlist geëxporteerd naar Live → Market → Pairs.")
-        # Optional: jump to Live page (best-effort)
         try:
             st.switch_page("streamlit_app.py")
         except Exception:
             pass
 with c_exp2:
-    last_exp = st.session_state.get("scanner:last_exported_pairs")
-    if last_exp:
-        st.caption(f"Last export to Live: {last_exp}")
-
-
+    if pairs_str:
+        st.download_button("Download pairs.txt", data=pairs_str, file_name="pairs.txt", mime="text/plain")
+with c_exp3:
+    if pairs_str:
+        st.caption(f"Copy/paste pairs: {pairs_str}")
+        last_exp = st.session_state.get("scanner:last_exported_pairs")
+        if last_exp:
+            st.caption(f"Last export to Live: {last_exp}")
 
 if compute_ohlcv and shortlist:
     df_top = df[df["symbol"].isin(shortlist)].copy()

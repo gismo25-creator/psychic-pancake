@@ -3,6 +3,8 @@ import math
 import time
 import json
 import hashlib
+import re
+import io
 from collections import deque
 from typing import Dict, Tuple
 
@@ -13,6 +15,23 @@ PAGE_NS_LIVE = "live"
 
 def k_live(s: str) -> str:
     return f"{PAGE_NS_LIVE}:{s}"
+
+
+# --- Scanner export fallback (pairs) ---
+try:
+    _qp_pairs = None
+    try:
+        _qp_pairs = st.query_params.get("pairs")
+    except Exception:
+        _qp = st.experimental_get_query_params()
+        _qp_pairs = (_qp.get("pairs", [None])[0] if isinstance(_qp.get("pairs"), list) else _qp.get("pairs"))
+    if _qp_pairs:
+        st.session_state[k_live("symbols_input")] = str(_qp_pairs)
+except Exception:
+    pass
+
+if "scanner:export_pairs_fallback" in st.session_state:
+    st.session_state[k_live("symbols_input")] = st.session_state.get("scanner:export_pairs_fallback", st.session_state.get(k_live("symbols_input"), ""))
 
 
 STATE_NS_LIVE = "live"
@@ -266,6 +285,57 @@ else:
 # ----------------------------
 st.sidebar.subheader("Market")
 symbols_input = st.sidebar.text_input("Pairs (comma-separated)", st.session_state.get(k_live("symbols_input"), "BTC/EUR, ETH/EUR"), key=k_live("symbols_input"))
+# Import pairs from file (optional)
+st.sidebar.caption("Importeer pairs via bestand (CSV of TXT). Handig na scanner export.")
+pairs_file = st.sidebar.file_uploader(
+    "Import pairs file",
+    type=["txt", "csv"],
+    key=k_live("pairs_file"),
+    help="TXT: één symbol per regel of comma-separated. CSV: kolom 'symbol' of 'pairs'."
+)
+if pairs_file is not None:
+    try:
+        name = (pairs_file.name or "").lower()
+        content = pairs_file.getvalue()
+        imported = []
+        if name.endswith(".txt"):
+            s = content.decode("utf-8", errors="ignore")
+            # accept lines or comma-separated
+            imported = [x.strip().upper() for x in re.split(r"[\n,;\t ]+", s) if x.strip()]
+        elif name.endswith(".csv"):
+            df_imp = pd.read_csv(io.BytesIO(content))
+            col = None
+            for c in ["symbol", "symbols", "pair", "pairs"]:
+                if c in df_imp.columns:
+                    col = c
+                    break
+            if col is None:
+                raise ValueError("CSV mist kolom 'symbol' (of 'pairs').")
+            vals = df_imp[col].astype(str).tolist()
+            # split possible comma-separated cells
+            tmp = []
+            for v in vals:
+                tmp.extend([x.strip().upper() for x in str(v).split(",") if x.strip()])
+            imported = tmp
+        # normalize to format BASE/QUOTE
+        imported = [x.replace("-", "/").upper() for x in imported]
+        # filter empties and keep unique while preserving order
+        seen = set()
+        imported_u = []
+        for x in imported:
+            if "/" not in x:
+                continue
+            if x not in seen:
+                imported_u.append(x)
+                seen.add(x)
+        if imported_u:
+            st.session_state[k_live("symbols_input")] = ", ".join(imported_u)
+            st.sidebar.success(f"Pairs geïmporteerd: {', '.join(imported_u[:10])}" + (" ..." if len(imported_u) > 10 else ""))
+            st.rerun()
+        else:
+            st.sidebar.warning("Geen geldige pairs gevonden in het bestand.")
+    except Exception as e:
+        st.sidebar.error(f"Import error: {e}")
 symbols = [s.strip().upper() for s in symbols_input.split(",") if s.strip()]
 if not symbols:
     st.stop()
