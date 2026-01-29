@@ -60,6 +60,7 @@ from core.grid.linear import generate_linear_grid
 from core.grid.fibonacci import generate_fibonacci_grid
 from core.grid.engine import GridEngine
 from core.exchange.simulator import PortfolioSimulatorTrader
+from core.bots.store import load_bots
 from core.exchange.bitvavo_live import BitvavoLiveTrader, BitvavoRateLimitBanned
 
 from core.ml.volatility import atr, realized_vol, bollinger_bandwidth, adx, vol_cluster_acf1
@@ -109,6 +110,11 @@ dryrun_allowed = bool(st.session_state.get('dryrun_allowed', True))
 active_bundle = st.session_state.get('active_bundle', None)
 
 st.set_page_config(layout="wide")
+
+# --- Stable Live page keys (avoid resets when switching pages)
+def lk(name: str) -> str:
+    return "live:" + name
+
 st.title("Grid Trading Bot – Bitvavo (Simulation + Panic Button + Auto-Pause)")
 
 # --- BB state (for mean-reversion buy-filter) ---
@@ -284,8 +290,12 @@ else:
 # Market selection
 # ----------------------------
 st.sidebar.subheader("Market")
-symbols_input = st.sidebar.text_input("Pairs (comma-separated)", st.session_state.get(k_live("symbols_input"), "BTC/EUR, ETH/EUR"), key=k_live("symbols_input"))
-# Import pairs from file (optional)
+# Apply imported pairs before widget instantiation (prevents Streamlit state error)
+PENDING_PAIRS_KEY = k_live("symbols_pending")
+if PENDING_PAIRS_KEY in st.session_state and st.session_state[PENDING_PAIRS_KEY]:
+    st.session_state[k_live("symbols_input")] = st.session_state[PENDING_PAIRS_KEY]
+    st.session_state[PENDING_PAIRS_KEY] = ""
+# Import pairs from file (optional) — sets a pending value and triggers rerun BEFORE the Pairs widget is created
 st.sidebar.caption("Importeer pairs via bestand (CSV of TXT). Handig na scanner export.")
 pairs_file = st.sidebar.file_uploader(
     "Import pairs file",
@@ -300,7 +310,6 @@ if pairs_file is not None:
         imported = []
         if name.endswith(".txt"):
             s = content.decode("utf-8", errors="ignore")
-            # accept lines or comma-separated
             imported = [x.strip().upper() for x in re.split(r"[\n,;\t ]+", s) if x.strip()]
         elif name.endswith(".csv"):
             df_imp = pd.read_csv(io.BytesIO(content))
@@ -312,14 +321,12 @@ if pairs_file is not None:
             if col is None:
                 raise ValueError("CSV mist kolom 'symbol' (of 'pairs').")
             vals = df_imp[col].astype(str).tolist()
-            # split possible comma-separated cells
             tmp = []
             for v in vals:
                 tmp.extend([x.strip().upper() for x in str(v).split(",") if x.strip()])
             imported = tmp
-        # normalize to format BASE/QUOTE
+
         imported = [x.replace("-", "/").upper() for x in imported]
-        # filter empties and keep unique while preserving order
         seen = set()
         imported_u = []
         for x in imported:
@@ -328,30 +335,54 @@ if pairs_file is not None:
             if x not in seen:
                 imported_u.append(x)
                 seen.add(x)
+
         if imported_u:
-            st.session_state[k_live("symbols_input")] = ", ".join(imported_u)
-            st.sidebar.success(f"Pairs geïmporteerd: {', '.join(imported_u[:10])}" + (" ..." if len(imported_u) > 10 else ""))
+            st.session_state[k_live("symbols_pending")] = ", ".join(imported_u)
+            st.sidebar.success(f"Pairs klaar om te zetten: {', '.join(imported_u[:10])}" + (" ..." if len(imported_u) > 10 else ""))
             st.rerun()
         else:
             st.sidebar.warning("Geen geldige pairs gevonden in het bestand.")
     except Exception as e:
         st.sidebar.error(f"Import error: {e}")
-symbols = [s.strip().upper() for s in symbols_input.split(",") if s.strip()]
+# --- Bot Manager integration (virtual budgets per bot; Simulation/Dry-run only for now)
+if lk("use_bot_manager") not in st.session_state:
+    st.session_state[lk("use_bot_manager")] = False
+
+use_bot_manager = st.sidebar.checkbox(
+    "Use Bot Manager bots (recommended for multi-bot budgets)",
+    key=lk("use_bot_manager"),
+    help="Als dit aan staat worden bots geladen uit data/bots.json. Elke bot draait met een eigen virtueel budget (paper/dry-run)."
+)
+
+# Default pairs (only used when not using Bot Manager)
+if lk("symbols_input") not in st.session_state:
+    st.session_state[lk("symbols_input")] = "BTC/EUR, ETH/EUR"
+
+bots = []
+symbols_from_bots = []
+if use_bot_manager:
+    bots_all = load_bots()
+    bots = [b for b in bots_all if bool(b.get('enabled', True))]
+    if not bots:
+        st.sidebar.warning("Geen enabled bots gevonden in Bot Manager. Ga naar pagina 'Bot Manager' en maak/enable bots.")
+        st.stop()
+    symbols_from_bots = [str(b.get('symbol','')).upper().replace('-', '/').strip() for b in bots]
+    symbols_from_bots = [s for s in symbols_from_bots if s and '/' in s]
+    symbols_from_bots = list(dict.fromkeys(symbols_from_bots))
+    if not symbols_from_bots:
+        st.sidebar.warning("Bots hebben geen geldige symbols.")
+        st.stop()
+    # Set pairs BEFORE the widget is created (no value arg -> avoids Streamlit warning)
+    st.session_state[lk("symbols_input")] = ", ".join(symbols_from_bots)
+
+symbols_input = st.sidebar.text_input("Pairs (comma-separated)", key=lk("symbols_input"), disabled=use_bot_manager)
+symbols = [s.strip().upper().replace('-', '/') for s in str(symbols_input).split(',') if s.strip()]
+# If Bot Manager is enabled, use symbols from bots (UI shows them in the input too)
+if use_bot_manager and symbols_from_bots:
+    symbols = symbols_from_bots
+symbols = list(dict.fromkeys(symbols))  # de-dupe to avoid duplicate widget keys
 if not symbols:
     st.stop()
-
-
-# --- Bot manager (per-pair enable/disable) ---
-if "bot_enabled" not in st.session_state:
-    st.session_state.bot_enabled = {}
-for _s in symbols:
-    st.session_state.bot_enabled.setdefault(_s, True)
-
-st.sidebar.subheader("Bots")
-st.sidebar.caption("Per pair aan/uit zonder je hele app te stoppen. (Global START/STOP blijft leidend.)")
-for _s in symbols:
-    st.session_state.bot_enabled[_s] = st.sidebar.checkbox(f"Enable {_s}", value=bool(st.session_state.bot_enabled.get(_s, True)), key=k_live(f"bot_en::{_s}"))
-
 timeframe = st.sidebar.selectbox("Timeframe", ["1m", "5m", "15m"], index=1)
 
 refresh = st.sidebar.slider("Refresh sec", 5, 60, 15)
@@ -367,6 +398,10 @@ exec_mode = st.sidebar.selectbox(
     index=0, key="exec_mode",
     help="Simulation and Dry-run Live never place real orders. Live (Bitvavo) can place REAL orders when explicitly enabled and acknowledged."
 )
+# Guard: Bot Manager virtual budgets currently supported only for Simulation/Dry-run
+if use_bot_manager and exec_mode.startswith("Live"):
+    st.sidebar.error("Live executor met virtuele bot-budget-reservering is nog niet ingeschakeld. Kies Simulation of Dry-run.")
+    st.stop()
 
 # Safety gates for Dry-run Live
 allow_dryrun_without_active = st.sidebar.checkbox(
@@ -1003,6 +1038,144 @@ for sym in symbols:
         except Exception:
             pass
     last_ts_map[sym] = df["timestamp"].iloc[-1]
+
+# --- Bot Manager mode: run isolated bot portfolios (Simulation/Dry-run)
+if use_bot_manager:
+    if "bot_traders" not in st.session_state:
+        st.session_state.bot_traders = {}
+    if "bot_engines" not in st.session_state:
+        st.session_state.bot_engines = {}
+
+    global_fee_sig = (maker_fee, taker_fee, slippage_pct, fee_mode)
+
+    bot_summaries = {}
+    for b in bots:
+        bot_id = str(b.get("id","")).strip()
+        if not bot_id:
+            continue
+        sym = str(b.get("symbol","")).upper().replace("-", "/").strip()
+        if sym not in dfs:
+            continue
+
+        base = sym.split("/")[0]
+        budget = float(b.get("budget_eur", 0.0) or 0.0)
+
+        sig = (bot_id, budget) + global_fee_sig
+        bt_key = f"bottrader:{bot_id}"
+        if bt_key not in st.session_state.bot_traders or getattr(st.session_state.bot_traders[bt_key], "_sig", None) != sig:
+            t = PortfolioSimulatorTrader(
+                cash_quote=budget,
+                maker_fee=maker_fee,
+                taker_fee=taker_fee,
+                slippage=slippage_pct,
+                fee_mode=fee_mode,
+                quote_ccy="EUR",
+                max_exposure_quote={base: budget} if budget > 0 else {base: 0.0},
+            )
+            t._sig = sig
+            st.session_state.bot_traders[bt_key] = t
+
+        trader_b = st.session_state.bot_traders[bt_key]
+        df = dfs[sym]
+        price = float(df["close"].iloc[-1])
+        ts = df["timestamp"].iloc[-1]
+
+        grid_type = "Fibonacci" if str(b.get("grid_type","Linear")).lower().startswith("fib") else "Linear"
+        base_range_pct = float(b.get("base_range_pct", 1.0))
+        order_size = float(b.get("order_size_base", 0.0))
+        base_levels = int(b.get("base_levels", 10))
+
+        lower = price * (1 - base_range_pct / 100.0)
+        upper = price * (1 + base_range_pct / 100.0)
+        if grid_type == "Linear":
+            grid = generate_linear_grid(lower, upper, max(3, base_levels))
+        else:
+            grid = generate_fibonacci_grid(lower, upper)
+
+        eng_key = f"botengine:{bot_id}"
+        eng_sig = (sym, grid_type, round(lower,2), round(upper,2), len(grid), float(order_size))
+        if eng_key not in st.session_state.bot_engines or getattr(st.session_state.bot_engines[eng_key], "_signature", None) != eng_sig:
+            eng = GridEngine(sym, grid, order_size)
+            eng._signature = eng_sig
+            st.session_state.bot_engines[eng_key] = eng
+
+        eng = st.session_state.bot_engines[eng_key]
+
+        if st.session_state.trading_enabled:
+            eng.check_price(price, trader_b, ts, allow_buys=True)
+
+        eq_b = trader_b.equity({sym: price})
+        bot_summaries[bot_id] = {
+            "name": str(b.get("name", bot_id)),
+            "symbol": sym,
+            "budget": budget,
+            "cash": trader_b.cash,
+            "equity": eq_b,
+            "pos_base": trader_b.positions.get(base, 0.0),
+            "avg_entry": trader_b.avg_entry_price(base),
+            "trades": len(eng.trades),
+            "pnl_realized": sum(float(t.get("pnl",0.0)) for t in eng.trades if t.get("side")=="SELL"),
+        }
+
+    st.subheader("Bots (Bot Manager mode)")
+    if not bot_summaries:
+        st.info("Geen botdata beschikbaar. Controleer symbols en of data opgehaald kan worden.")
+        st.stop()
+
+    bot_df = pd.DataFrame([{"bot_id": k, **v} for k,v in bot_summaries.items()]).sort_values(["symbol","name"])
+    bot_df["cash"] = bot_df["cash"].round(2)
+    bot_df["equity"] = bot_df["equity"].round(2)
+    bot_df["pos_base"] = bot_df["pos_base"].astype(float).round(6)
+    bot_df["avg_entry"] = bot_df["avg_entry"].astype(float).round(2)
+    bot_df["pnl_realized"] = bot_df["pnl_realized"].round(2)
+    st.dataframe(bot_df.rename(columns={"bot_id":"bot","pnl_realized":"Realized PnL (EUR)","pos_base":"Pos (base)"}), use_container_width=True, height=240)
+
+    tab_labels = [f"{row['name']} — {row['symbol']}" for _, row in bot_df.iterrows()]
+    tabs = st.tabs(tab_labels)
+    for (idx_row, row), tab in zip(bot_df.iterrows(), tabs):
+        with tab:
+            bot_id = row["bot_id"]
+            sym = row["symbol"]
+            base = sym.split("/")[0]
+            df = dfs[sym]
+            trader_b = st.session_state.bot_traders[f"bottrader:{bot_id}"]
+            eng = st.session_state.bot_engines[f"botengine:{bot_id}"]
+
+            st.caption(f"Budget: {row['budget']:.2f} EUR | Cash: {row['cash']:.2f} | Equity: {row['equity']:.2f} | Pos: {row['pos_base']:.6f} {base}")
+
+            fig = go.Figure(go.Candlestick(
+                x=df["timestamp"], open=df["open"], high=df["high"], low=df["low"], close=df["close"], name="Price"
+            ))
+            for lvl in eng.grid:
+                fig.add_hline(y=lvl, line_dash="dot")
+            for t in eng.trades[-300:]:
+                symbol_m = "triangle-up" if t["side"]=="BUY" else "triangle-down"
+                fig.add_scatter(x=[t["time"]], y=[t["price"]], mode="markers",
+                                marker=dict(color="green" if t["side"]=="BUY" else "red", symbol=symbol_m, size=10),
+                                name=t["side"])
+            fig.update_layout(height=520, xaxis_rangeslider_visible=False)
+            st.plotly_chart(fig, use_container_width=True)
+
+            st.subheader("Trades")
+            if eng.trades:
+                tdf = pd.DataFrame(eng.trades).sort_values("time", ascending=False)
+                for c in ["price","fee_paid","cash_delta","pnl"]:
+                    if c in tdf.columns:
+                        tdf[c] = pd.to_numeric(tdf[c], errors="coerce")
+                if "fee_rate" in tdf.columns:
+                    tdf["fee_rate_pct"] = (pd.to_numeric(tdf["fee_rate"], errors="coerce")*100).round(3)
+                if "price" in tdf.columns:
+                    tdf["price"] = tdf["price"].round(2)
+                if "amount" in tdf.columns:
+                    tdf["amount"] = pd.to_numeric(tdf["amount"], errors="coerce").round(6)
+                if "pnl" in tdf.columns:
+                    tdf["pnl"] = tdf["pnl"].round(2)
+                show_cols = [c for c in ["time","side","price","amount","fee_rate_pct","fee_paid","cash_delta","pnl","reason"] if c in tdf.columns]
+                st.dataframe(tdf[show_cols], use_container_width=True, height=320)
+            else:
+                st.info("Nog geen trades.")
+
+    st.stop()
 
 
 def compute_returns(df: pd.DataFrame) -> pd.Series:

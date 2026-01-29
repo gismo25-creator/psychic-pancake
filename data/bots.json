@@ -1,0 +1,41 @@
+[
+  {
+    "id": "1c5c952a",
+    "name": "AXS01",
+    "symbol": "AXS/EUR",
+    "enabled": true,
+    "budget_eur": 100.0,
+    "grid_type": "Linear",
+    "base_range_pct": 1.0,
+    "base_levels": 10,
+    "order_size_base": 10.0,
+    "dynamic_spacing": true,
+    "tp_floor_pct": 1.5000000000000007
+  },
+  {
+    "id": "36d49a68",
+    "name": "AXS01_copy",
+    "symbol": "AXS/EUR",
+    "enabled": true,
+    "budget_eur": 100.0,
+    "grid_type": "Linear",
+    "base_range_pct": 1.1,
+    "base_levels": 8,
+    "order_size_base": 10.0,
+    "dynamic_spacing": true,
+    "tp_floor_pct": 2.0500000000000007
+  },
+  {
+    "id": "deb29b15",
+    "name": "AXS01_copy",
+    "symbol": "AXS/EUR",
+    "enabled": true,
+    "budget_eur": 100.0,
+    "grid_type": "Linear",
+    "base_range_pct": 1.2,
+    "base_levels": 10,
+    "order_size_base": 11.0,
+    "dynamic_spacing": true,
+    "tp_floor_pct": 2.000000000000001
+  }
+]
