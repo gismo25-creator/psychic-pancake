@@ -26,12 +26,12 @@ try:
         _qp = st.experimental_get_query_params()
         _qp_pairs = (_qp.get("pairs", [None])[0] if isinstance(_qp.get("pairs"), list) else _qp.get("pairs"))
     if _qp_pairs:
-        st.session_state[k_live("symbols_input")] = str(_qp_pairs)
+        st.session_state[k_live("manual_symbols_input")] = str(_qp_pairs)
 except Exception:
     pass
 
 if "scanner:export_pairs_fallback" in st.session_state:
-    st.session_state[k_live("symbols_input")] = st.session_state.get("scanner:export_pairs_fallback", st.session_state.get(k_live("symbols_input"), ""))
+    st.session_state[k_live("manual_symbols_input")] = st.session_state.get("scanner:export_pairs_fallback", st.session_state.get(k_live("manual_symbols_input"), ""))
 
 
 STATE_NS_LIVE = "live"
@@ -293,7 +293,7 @@ st.sidebar.subheader("Market")
 # Apply imported pairs before widget instantiation (prevents Streamlit state error)
 PENDING_PAIRS_KEY = k_live("symbols_pending")
 if PENDING_PAIRS_KEY in st.session_state and st.session_state[PENDING_PAIRS_KEY]:
-    st.session_state[k_live("symbols_input")] = st.session_state[PENDING_PAIRS_KEY]
+    st.session_state[k_live("manual_symbols_input")] = st.session_state[PENDING_PAIRS_KEY]
     st.session_state[PENDING_PAIRS_KEY] = ""
 # Import pairs from file (optional) — sets a pending value and triggers rerun BEFORE the Pairs widget is created
 st.sidebar.caption("Importeer pairs via bestand (CSV of TXT). Handig na scanner export.")
@@ -355,8 +355,8 @@ use_bot_manager = st.sidebar.checkbox(
 )
 
 # Default pairs (only used when not using Bot Manager)
-if lk("symbols_input") not in st.session_state:
-    st.session_state[lk("symbols_input")] = "BTC/EUR, ETH/EUR"
+if lk("manual_symbols_input") not in st.session_state:
+    st.session_state[lk("manual_symbols_input")] = "BTC/EUR, ETH/EUR"
 
 bots = []
 symbols_from_bots = []
@@ -372,11 +372,12 @@ if use_bot_manager:
     if not symbols_from_bots:
         st.sidebar.warning("Bots hebben geen geldige symbols.")
         st.stop()
-    # Set pairs BEFORE the widget is created (no value arg -> avoids Streamlit warning)
-    st.session_state[lk("symbols_input")] = ", ".join(symbols_from_bots)
 
-symbols_input = st.sidebar.text_input("Pairs (comma-separated)", key=lk("symbols_input"), disabled=use_bot_manager)
-symbols = [s.strip().upper().replace('-', '/') for s in str(symbols_input).split(',') if s.strip()]
+
+    # Show bot pairs (read-only) — does not modify the manual pairs widget state
+    st.sidebar.text_area("Bot pairs (from Bot Manager)", ", ".join(symbols_from_bots), height=90, disabled=True)
+manual_symbols_input = st.sidebar.text_input("Pairs (comma-separated)", key=lk("manual_symbols_input"), disabled=use_bot_manager)
+symbols = [s.strip().upper().replace('-', '/') for s in str(manual_symbols_input).split(',') if s.strip()]
 # If Bot Manager is enabled, use symbols from bots (UI shows them in the input too)
 if use_bot_manager and symbols_from_bots:
     symbols = symbols_from_bots

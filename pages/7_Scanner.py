@@ -127,7 +127,7 @@ shortlist = st.multiselect(
     help="Kies een shortlist zodat we ATR/ADX/BB alleen voor die paren ophalen (rate-limit vriendelijk)."
 )
 # Export shortlist to Live page pairs input
-LIVE_SYMBOLS_KEY = "live:symbols_input"
+LIVE_SYMBOLS_KEY = "live:manual_symbols_input"
 pairs_str = ", ".join(shortlist) if shortlist else ""
 c_exp1, c_exp2, c_exp3 = st.columns([1, 1, 2])
 with c_exp1:
