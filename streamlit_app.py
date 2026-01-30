@@ -11,6 +11,33 @@ from typing import Dict, Tuple
 import pandas as pd
 import streamlit as st
 
+
+# ----------------------------
+# Health / diagnostics (persisted in session_state)
+# ----------------------------
+HEALTH_KEY = "health"
+
+
+def _health() -> dict:
+    if HEALTH_KEY not in st.session_state or not isinstance(st.session_state.get(HEALTH_KEY), dict):
+        st.session_state[HEALTH_KEY] = {}
+    return st.session_state[HEALTH_KEY]
+
+
+def health_set(k: str, v) -> None:
+    h = _health()
+    h[k] = v
+    st.session_state[HEALTH_KEY] = h
+
+
+def health_note(event: str, detail: str = "") -> None:
+    now = time.time()
+    health_set("last_event", event)
+    health_set("last_event_ts", now)
+    if detail:
+        health_set("last_event_detail", str(detail)[:800])
+
+
 PAGE_NS_LIVE = "live"
 
 def k_live(s: str) -> str:
@@ -111,9 +138,62 @@ active_bundle = st.session_state.get('active_bundle', None)
 
 st.set_page_config(layout="wide")
 
+# Update per-rerun heartbeat (used by Health panel)
+health_set("last_rerun_ts", time.time())
+
 # --- Stable Live page keys (avoid resets when switching pages)
 def lk(name: str) -> str:
     return "live:" + name
+
+# --- Persist Live UI prefs to disk (survive app reload / session reset)
+import json as _json
+from pathlib import Path as _Path
+
+def _ui_prefs_path() -> _Path:
+    return _Path(__file__).parent / 'data' / 'ui_prefs.json'
+
+def _load_ui_prefs() -> dict:
+    p = _ui_prefs_path()
+    try:
+        if p.exists():
+            return _json.loads(p.read_text(encoding='utf-8'))
+    except Exception:
+        pass
+    return {}
+
+def _save_ui_prefs(prefs: dict) -> None:
+    p = _ui_prefs_path()
+    try:
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(_json.dumps(prefs, indent=2, sort_keys=True), encoding='utf-8')
+    except Exception:
+        # keep UI running even if disk is read-only
+        pass
+
+def _sync_prefs_from_state() -> None:
+    prefs = _load_ui_prefs()
+    prefs.update({
+        'use_bot_manager': bool(st.session_state.get(lk('use_bot_manager'), False)),
+        'manual_symbols_input': str(st.session_state.get(lk('manual_symbols_input'), 'BTC/EUR, ETH/EUR')),
+        'timeframe': str(st.session_state.get(lk('timeframe'), '5m')),
+        'refresh_sec': int(st.session_state.get(lk('refresh_sec'), 15)),
+        'exec_mode': str(st.session_state.get(lk('exec_mode'), 'Simulation (paper)')),
+    })
+    _save_ui_prefs(prefs)
+
+# one-time load of prefs into session_state (if missing)
+_prefs = _load_ui_prefs()
+if lk('use_bot_manager') not in st.session_state and 'use_bot_manager' in _prefs:
+    st.session_state[lk('use_bot_manager')] = bool(_prefs['use_bot_manager'])
+if lk('manual_symbols_input') not in st.session_state and 'manual_symbols_input' in _prefs:
+    st.session_state[lk('manual_symbols_input')] = str(_prefs['manual_symbols_input'])
+if lk('timeframe') not in st.session_state and 'timeframe' in _prefs:
+    st.session_state[lk('timeframe')] = str(_prefs['timeframe'])
+if lk('refresh_sec') not in st.session_state and 'refresh_sec' in _prefs:
+    st.session_state[lk('refresh_sec')] = int(_prefs['refresh_sec'])
+if lk('exec_mode') not in st.session_state and 'exec_mode' in _prefs:
+    st.session_state[lk('exec_mode')] = str(_prefs['exec_mode'])
+
 
 st.title("Grid Trading Bot – Bitvavo (Simulation + Panic Button + Auto-Pause)")
 
@@ -376,7 +456,7 @@ if use_bot_manager:
 
     # Show bot pairs (read-only) — does not modify the manual pairs widget state
     st.sidebar.text_area("Bot pairs (from Bot Manager)", ", ".join(symbols_from_bots), height=90, disabled=True)
-manual_symbols_input = st.sidebar.text_input("Pairs (comma-separated)", key=lk("manual_symbols_input"), disabled=use_bot_manager)
+manual_symbols_input = st.sidebar.text_input("Pairs (comma-separated)", key=lk("manual_symbols_input"), disabled=use_bot_manager, on_change=_sync_prefs_from_state)
 symbols = [s.strip().upper().replace('-', '/') for s in str(manual_symbols_input).split(',') if s.strip()]
 # If Bot Manager is enabled, use symbols from bots (UI shows them in the input too)
 if use_bot_manager and symbols_from_bots:
@@ -388,6 +468,10 @@ timeframe = st.sidebar.selectbox("Timeframe", ["1m", "5m", "15m"], index=1)
 
 refresh = st.sidebar.slider("Refresh sec", 5, 60, 15)
 st_autorefresh(interval=refresh * 1000, key=k_live("refresh"))
+
+# Persist Live UI prefs (survive reload/session reset)
+_sync_prefs_from_state()
+
 # --- Execution mode (no real orders are ever sent from this app unless live executor is added)
 st.sidebar.subheader("Execution mode")
 if len(symbols) > 1:
@@ -463,67 +547,95 @@ slippage_pct = st.sidebar.number_input("Slippage (%)", 0.0, 1.0, 0.05, step=0.01
 
 
 # ----------------------------
-# Risk limits
+# Risk (collapsible)
 # ----------------------------
-st.sidebar.subheader("Risk limits")
-default_cap = st.sidebar.number_input("Max exposure per asset (EUR)", min_value=0.0, value=300.0, step=50.0)
-per_asset_caps = {}
-for sym in symbols:
-    base = sym.split("/")[0]
-    if base in per_asset_caps:
-        continue
-    per_asset_caps[base] = st.sidebar.number_input(
-        f"Cap {base} (EUR)", min_value=0.0, value=float(default_cap), step=50.0
+with st.sidebar.expander("Risk", expanded=False):
+
+    # ----------------------------
+    # Risk limits
+    # ----------------------------
+    st.subheader("Risk limits")
+    default_cap = st.number_input("Max exposure per asset (EUR)", min_value=0.0, value=300.0, step=50.0)
+    per_asset_caps = {}
+    for sym in symbols:
+        base = sym.split("/")[0]
+        if base in per_asset_caps:
+            continue
+        per_asset_caps[base] = st.number_input(
+            f"Cap {base} (EUR)", min_value=0.0, value=float(default_cap), step=50.0
+        )
+
+    # ----------------------------
+    # Equity-based position scaling
+    # ----------------------------
+    st.subheader("Equity-based position scaling (simulation)")
+    enable_scaling = st.checkbox("Enable equity-based scaling", value=False)
+    scaling_mode = st.selectbox(
+        "Scaling mode", ["Simple equity scaling", "ATR risk sizing"],
+        index=0, disabled=not enable_scaling
+    )
+    min_order_size = st.number_input(
+        "Min order size (base)", min_value=0.0, value=0.0001, format="%.6f",
+        disabled=not enable_scaling
+    )
+    max_order_size = st.number_input(
+        "Max order size (base)", min_value=0.0, value=0.01, format="%.6f",
+        disabled=not enable_scaling
+    )
+    risk_per_trade_pct = st.slider(
+        "Risk per trade (% equity)", 0.01, 2.00, 0.25, step=0.01,
+        disabled=(not enable_scaling or scaling_mode != "ATR risk sizing")
+    )
+    atr_risk_mult = st.slider(
+        "ATR risk multiplier", 0.5, 10.0, 3.0, step=0.5,
+        disabled=(not enable_scaling or scaling_mode != "ATR risk sizing")
+    )
+    reset_baseline = st.button("Reset scaling baseline (start equity)", disabled=not enable_scaling)
+    if reset_baseline:
+        st.session_state.start_equity = None
+
+    # ----------------------------
+    # Portfolio risk: drawdown & correlation
+    # ----------------------------
+    st.subheader("Portfolio risk: drawdown & correlation")
+    enable_dd_limit = st.checkbox("Enable max assets-in-drawdown", value=True)
+    dd_asset_threshold_pct = st.slider(
+        "Asset drawdown threshold (%)", 0.5, 50.0, 5.0, step=0.5, disabled=not enable_dd_limit
+    )
+    max_assets_in_dd = st.slider(
+        "Max assets in drawdown", 0, 10, 2, step=1, disabled=not enable_dd_limit
     )
 
+    enable_corr_filter = st.checkbox("Enable correlation filter", value=True)
+    corr_window = st.slider(
+        "Correlation window (candles)", 20, 300, 120, step=10, disabled=not enable_corr_filter
+    )
+    corr_threshold = st.slider(
+        "Correlation threshold", 0.0, 0.99, 0.85, step=0.01, disabled=not enable_corr_filter
+    )
 
-# ----------------------------
-# Stop-loss testing (simulation)
-# ----------------------------
+    # ----------------------------
+    # Stop-loss testing (simulation)
+    # ----------------------------
+    st.subheader("Stop-loss testing (simulation)")
+    enable_portfolio_dd = st.checkbox("Enable portfolio drawdown stop", value=True)
+    max_dd_pct = st.slider(
+        "Max drawdown (%)", 1.0, 50.0, 10.0, step=0.5, disabled=not enable_portfolio_dd
+    )
+    dd_action_flatten = st.checkbox(
+        "On portfolio stop: flatten all positions", value=True, disabled=not enable_portfolio_dd
+    )
 
-# ----------------------------
-# ----------------------------
-# Equity-based position scaling
-# ----------------------------
-st.sidebar.subheader("Equity-based position scaling (simulation)")
-enable_scaling = st.sidebar.checkbox("Enable equity-based scaling", value=False)
-scaling_mode = st.sidebar.selectbox(
-    "Scaling mode", ["Simple equity scaling", "ATR risk sizing"],
-    index=0, disabled=not enable_scaling
-)
-min_order_size = st.sidebar.number_input(
-    "Min order size (base)", min_value=0.0, value=0.0001, format="%.6f",
-    disabled=not enable_scaling
-)
-max_order_size = st.sidebar.number_input(
-    "Max order size (base)", min_value=0.0, value=0.01, format="%.6f",
-    disabled=not enable_scaling
-)
-risk_per_trade_pct = st.sidebar.slider(
-    "Risk per trade (% equity)", 0.01, 2.00, 0.25, step=0.01,
-    disabled=(not enable_scaling or scaling_mode != "ATR risk sizing")
-)
-atr_risk_mult = st.sidebar.slider(
-    "ATR risk multiplier", 0.5, 10.0, 3.0, step=0.5,
-    disabled=(not enable_scaling or scaling_mode != "ATR risk sizing")
-)
-reset_baseline = st.sidebar.button("Reset scaling baseline (start equity)", disabled=not enable_scaling)
-if reset_baseline:
-    st.session_state.start_equity = None
+    enable_asset_stop = st.checkbox("Enable per-asset stop", value=True)
+    asset_stop_pct = st.slider(
+        "Per-asset stop from avg entry (%)", 0.5, 50.0, 8.0, step=0.5, disabled=not enable_asset_stop
+    )
 
-
-# ----------------------------
-# Portfolio risk: drawdown & correlation
-# ----------------------------
-st.sidebar.subheader("Portfolio risk: drawdown & correlation")
-
-enable_dd_limit = st.sidebar.checkbox("Enable max assets-in-drawdown", value=True)
-dd_asset_threshold_pct = st.sidebar.slider("Asset drawdown threshold (%)", 0.5, 50.0, 5.0, step=0.5, disabled=not enable_dd_limit)
-max_assets_in_dd = st.sidebar.slider("Max assets in drawdown", 0, 10, 2, step=1, disabled=not enable_dd_limit)
-
-enable_corr_filter = st.sidebar.checkbox("Enable correlation filter", value=True)
-corr_window = st.sidebar.slider("Correlation window (candles)", 20, 300, 120, step=10, disabled=not enable_corr_filter)
-corr_threshold = st.sidebar.slider("Correlation threshold", 0.0, 0.99, 0.85, step=0.01, disabled=not enable_corr_filter)
+    use_atr_stop = st.checkbox("Also enable ATR-based stop", value=False, disabled=not enable_asset_stop)
+    atr_mult = st.slider(
+        "ATR multiple (stop = entry - m*ATR)", 0.5, 10.0, 3.0, step=0.5,
+        disabled=(not enable_asset_stop or not use_atr_stop)
+    )
 
 
 # ----------------------------
@@ -533,79 +645,59 @@ st.sidebar.subheader("Interpretable execution")
 show_decision_log = st.sidebar.checkbox("Show decision log tables", value=True)
 decision_log_rows = st.sidebar.slider("Decision log rows (per pair)", 50, 2000, 300, step=50)
 
-st.sidebar.subheader("Stop-loss testing (simulation)")
-enable_portfolio_dd = st.sidebar.checkbox("Enable portfolio drawdown stop", value=True)
-max_dd_pct = st.sidebar.slider(
-    "Max drawdown (%)", 1.0, 50.0, 10.0, step=0.5, disabled=not enable_portfolio_dd
-)
-dd_action_flatten = st.sidebar.checkbox(
-    "On portfolio stop: flatten all positions", value=True, disabled=not enable_portfolio_dd
-)
+with st.sidebar.expander("Metrics", expanded=False):
 
-enable_asset_stop = st.sidebar.checkbox("Enable per-asset stop", value=True)
-asset_stop_pct = st.sidebar.slider(
-    "Per-asset stop from avg entry (%)", 0.5, 50.0, 8.0, step=0.5, disabled=not enable_asset_stop
-)
+    # ----------------------------
+    # Regime stability
+    # ----------------------------
+    st.subheader("Regime stability")
+    cooldown_s = st.slider("Cooldown (seconds)", 0, 3600, 300, step=30)
+    confirm_n = st.slider("Confirmations required", 1, 10, 3)
 
-use_atr_stop = st.sidebar.checkbox("Also enable ATR-based stop", value=False, disabled=not enable_asset_stop)
-atr_mult = st.sidebar.slider(
-    "ATR multiple (stop = entry - m*ATR)", 0.5, 10.0, 3.0, step=0.5,
-    disabled=(not enable_asset_stop or not use_atr_stop)
-)
+    # ----------------------------
+    # Volatility clustering (metrics)
+    # ----------------------------
+    st.subheader("Volatility clustering (metrics)")
+    vc_window = st.slider("VC window (candles)", 30, 300, 120, step=10)
+    vc_alert = st.slider("VC alert threshold (ACF1)", 0.0, 0.99, 0.35, step=0.01)
 
-
-# ----------------------------
-# Regime stability
-# ----------------------------
-st.sidebar.subheader("Regime stability")
-cooldown_s = st.sidebar.slider("Cooldown (seconds)", 0, 3600, 300, step=30)
-confirm_n = st.sidebar.slider("Confirmations required", 1, 10, 3)
-# ----------------------------
-# Volatility clustering (metrics)
-# ----------------------------
-st.sidebar.subheader("Volatility clustering (metrics)")
-vc_window = st.sidebar.slider("VC window (candles)", 30, 300, 120, step=10)
-vc_alert = st.sidebar.slider("VC alert threshold (ACF1)", 0.0, 0.99, 0.35, step=0.01)
-# ----------------------------
-# Range efficiency & streaks (metrics)
-# ----------------------------
-st.sidebar.subheader("Range efficiency & streaks (metrics)")
-hit_window = st.sidebar.slider("Hit-rate window (candles)", 20, 500, 150, step=10)
-streak_scope = st.sidebar.slider("Streak scope (closed cycles)", 20, 2000, 300, step=20)
+    # ----------------------------
+    # Range efficiency & streaks (metrics)
+    # ----------------------------
+    st.subheader("Range efficiency & streaks (metrics)")
+    hit_window = st.slider("Hit-rate window (candles)", 20, 500, 150, step=10)
+    streak_scope = st.slider("Streak scope (closed cycles)", 20, 2000, 300, step=20)
 
 
 
 
-# ----------------------------
-# Per-pair grid settings
-# ----------------------------
-st.sidebar.subheader("Governance")
-st.sidebar.caption("Gebruik de Profile Manager pagina voor diff/validatie en apply.")
+with st.sidebar.expander("Profiles & governance", expanded=False):
+    st.subheader("Governance")
+    st.caption("Gebruik de Profile Manager pagina voor diff/validatie en apply.")
 
-st.sidebar.subheader("Per-pair grid settings")
+    st.subheader("Profiles import/export")
 
-st.sidebar.subheader("Profiles import/export")
+    # --- Import profiles.json safely (avoid rerun loops)
+    if "profiles_import_hash" not in st.session_state:
+        st.session_state.profiles_import_hash = None
 
-# --- Import profiles.json safely (avoid rerun loops)
-if "profiles_import_hash" not in st.session_state:
-    st.session_state.profiles_import_hash = None
+    uploaded = st.file_uploader("Import profiles.json", type=["json"], key="profiles_uploader")
+    import_clicked = False
+    file_bytes = None
+    file_hash = None
+    if uploaded is not None:
+        st.caption("Selecteer het bestand en klik daarna op **Import**.")
+        import_clicked = st.button("Import profiles.json", width="stretch")
+        try:
+            file_bytes = uploaded.getvalue()
+            file_hash = hashlib.sha256(file_bytes).hexdigest()
+        except Exception:
+            file_bytes = None
+            file_hash = None
 
-uploaded = st.sidebar.file_uploader("Import profiles.json", type=["json"], key="profiles_uploader")
-
-if uploaded is not None:
-    st.sidebar.caption("Selecteer het bestand en klik daarna op **Import**.")
-    import_clicked = st.sidebar.button("Import profiles.json", width="stretch")
-
-    try:
-        file_bytes = uploaded.getvalue()
-        file_hash = hashlib.sha256(file_bytes).hexdigest()
-    except Exception:
-        file_bytes = None
-        file_hash = None
-
-    if import_clicked:
+    if import_clicked and uploaded is not None:
         if file_hash is not None and file_hash == st.session_state.profiles_import_hash:
-            st.sidebar.info("Dit profielbestand is al geïmporteerd in deze sessie.")
+            st.info("Dit profielbestand is al geïmporteerd in deze sessie.")
         else:
             try:
                 cfg_blob = json.loads(file_bytes.decode("utf-8")) if file_bytes is not None else json.load(uploaded)
@@ -623,57 +715,62 @@ if uploaded is not None:
                             st.session_state[s_live('pair_cfg')][sym_u]["regime_profiles"] = blob["regime_profiles"]
 
                 st.session_state.profiles_import_hash = file_hash
-                st.sidebar.success("Profiles geïmporteerd. Je kunt nu per pair de settings bekijken/aanpassen.")
+                st.success("Profiles geïmporteerd. Je kunt nu per pair de settings bekijken/aanpassen.")
             except Exception as e:
-                st.sidebar.error(f"Import failed: {e}")
+                st.error(f"Import failed: {e}")
 
-# --- Apply trained profiles from Trainer page (same session)
-# --- Apply trained profiles from Trainer page (same session)
-if st.sidebar.button("Apply BEST profiles from Trainer", width="stretch"):
-    trained_best = st.session_state.get("trained_profiles_best")
-    trained = trained_best if isinstance(trained_best, dict) and trained_best else st.session_state.get("trained_profiles")
-    if isinstance(trained, dict) and trained:
-        st.session_state.setdefault("pair_cfg", {})
-        for sym, blob in trained.items():
-            sym_u = str(sym).upper()
-            st.session_state[s_live('pair_cfg')].setdefault(sym_u, {}).update(blob)
-        st.sidebar.success("Applied BEST trained profiles.")
-    else:
-        st.sidebar.info("No trained profiles found in session. Run Trainer page first.")
+    # --- Apply trained profiles from Trainer page (same session)
+    if st.button("Apply BEST profiles from Trainer", width="stretch"):
+        trained_best = st.session_state.get("trained_profiles_best")
+        trained = trained_best if isinstance(trained_best, dict) and trained_best else st.session_state.get("trained_profiles")
+        if isinstance(trained, dict) and trained:
+            st.session_state.setdefault("pair_cfg", {})
+            for sym, blob in trained.items():
+                sym_u = str(sym).upper()
+                st.session_state[s_live('pair_cfg')].setdefault(sym_u, {}).update(blob)
+            st.success("Applied BEST trained profiles.")
+        else:
+            st.info("No trained profiles found in session. Run Trainer page first.")
 
-if st.sidebar.button("Apply optimized profiles from Trainer", width="stretch"):
-    trained = st.session_state.get("trained_profiles")
-    if isinstance(trained, dict) and trained:
-        st.session_state.setdefault("pair_cfg", {})
-        for sym, blob in trained.items():
-            sym_u = str(sym).upper()
-            st.session_state[s_live('pair_cfg')].setdefault(sym_u, {}).update(blob)
-        st.sidebar.success("Applied trained profiles.")
-    else:
-        st.sidebar.info("No trained profiles found in session. Run Trainer page first.")
+    if st.button("Apply optimized profiles from Trainer", width="stretch"):
+        trained = st.session_state.get("trained_profiles")
+        if isinstance(trained, dict) and trained:
+            st.session_state.setdefault("pair_cfg", {})
+            for sym, blob in trained.items():
+                sym_u = str(sym).upper()
+                st.session_state[s_live('pair_cfg')].setdefault(sym_u, {}).update(blob)
+            st.success("Applied trained profiles.")
+        else:
+            st.info("No trained profiles found in session. Run Trainer page first.")
 
-# --- Export current profiles (only the regime-related fields)
-def _export_profiles():
-    out = {}
-    pair_cfg = st.session_state.get("pair_cfg", {})
-    if isinstance(pair_cfg, dict):
-        for sym, cfg in pair_cfg.items():
-            if not isinstance(cfg, dict):
-                continue
-            out[str(sym).upper()] = {
-                "use_regime_profiles": bool(cfg.get("use_regime_profiles", False)),
-                "regime_profile_rebuild": bool(cfg.get("regime_profile_rebuild", False)),
-                "regime_profiles": cfg.get("regime_profiles", {}),
-            }
-    return out
+    # --- Export current profiles (only the regime-related fields)
+    def _export_profiles_sidebar():
+        out = {}
+        pair_cfg = st.session_state.get("pair_cfg", {})
+        if isinstance(pair_cfg, dict):
+            for sym, cfg in pair_cfg.items():
+                if not isinstance(cfg, dict):
+                    continue
+                out[str(sym).upper()] = {
+                    "use_regime_profiles": bool(cfg.get("use_regime_profiles", False)),
+                    "regime_profile_rebuild": bool(cfg.get("regime_profile_rebuild", False)),
+                    "regime_profiles": cfg.get("regime_profiles", {}),
+                }
+        return out
 
-export_payload = json.dumps(_export_profiles(), indent=2)
-st.sidebar.download_button(
-    "Download current profiles.json",
-    data=export_payload,
-    file_name="profiles.json",
-    width="stretch",
-)
+    export_payload = json.dumps(_export_profiles_sidebar(), indent=2)
+    st.download_button(
+        "Download current profiles.json",
+        data=export_payload,
+        file_name="profiles.json",
+        width="stretch",
+    )
+
+
+# ----------------------------
+# Per-pair grid settings
+# ----------------------------
+st.sidebar.subheader("Per-pair grid settings")
 
 if "opt_suggestions" not in st.session_state:
     st.session_state.opt_suggestions = {}
@@ -972,6 +1069,13 @@ if "trader_signature" not in st.session_state or st.session_state.trader_signatu
 
 trader: PortfolioSimulatorTrader = st.session_state.trader
 
+# Expose live trader ban status in health panel (if applicable)
+try:
+    if isinstance(trader, BitvavoLiveTrader):
+        health_set("live_ban_until_ms", int(getattr(trader, "ban_until_ms", 0) or 0))
+except Exception:
+    pass
+
 
 
 # ----------------------------
@@ -1016,29 +1120,50 @@ for sym in symbols:
         st.error(f"Data fetch paused due to Bitvavo ban: {sym}")
         continue
     try:
+        health_set("last_public_ohlcv_attempt_ts", time.time())
+        health_set("last_public_ohlcv_symbol", sym)
         df = fetch_ohlcv_bitvavo_cached(sym, timeframe=timeframe, limit=300)
     except BitvavoRateLimitBan as e:
         st.session_state['bitvavo_banned_until_ms'] = int(e.banned_until_ms)
+        health_set("bitvavo_banned_until_ms", int(e.banned_until_ms))
+        health_note("Bitvavo public ban", str(e))
         st.error(f"Data error for {sym}: {e}")
         continue
     except Exception as e:
+        health_note("Public data error", f"{sym}: {e}")
         st.error(f"Data error for {sym}: {e}")
         continue
     dfs[sym] = df
+    health_set("last_public_ohlcv_ok_ts", time.time())
     last_prices[sym] = float(df["close"].iloc[-1])
     if exec_mode.startswith("Dry-run"):
         try:
+            health_set("last_public_ticker_attempt_ts", time.time())
+            health_set("last_public_ticker_symbol", sym)
             t = fetch_ticker_bitvavo_cached(sym)
             bid = t.get("bid"); ask = t.get("ask"); last = t.get("last")
             if (bid is not None) and (ask is not None):
                 last_prices[sym] = float((bid + ask) / 2.0)
             elif last is not None:
                 last_prices[sym] = float(last)
+            health_set("last_public_ticker_ok_ts", time.time())
         except BitvavoRateLimitBan as e:
             st.session_state['bitvavo_banned_until_ms'] = int(e.banned_until_ms)
+            health_set("bitvavo_banned_until_ms", int(e.banned_until_ms))
+            health_note("Bitvavo public ban", str(e))
         except Exception:
             pass
     last_ts_map[sym] = df["timestamp"].iloc[-1]
+    # per-symbol health
+    try:
+        _sym_health = _health().get("symbols", {}) or {}
+        _sym_health[str(sym)] = {
+            "last_bar_ts_utc": str(last_ts_map[sym]),
+            "last_close": float(last_prices[sym]),
+        }
+        health_set("symbols", _sym_health)
+    except Exception:
+        pass
 
 # --- Bot Manager mode: run isolated bot portfolios (Simulation/Dry-run)
 if use_bot_manager:
@@ -2331,3 +2456,78 @@ for i, sym in enumerate(dfs.keys()):
             st.caption(f"Position: {trader.positions.get(base, 0.0):.6f} {base}")
 
 st.caption("Stop-loss in simulatie: portfolio drawdown stop (optioneel flatten) + per-asset stop (avg-entry % en optioneel ATR). Reset session om stops te clearen.")
+
+
+# ----------------------------
+# Health panel (sidebar)
+# ----------------------------
+try:
+    # Update order/trade telemetry (best-effort)
+    tlist = list(getattr(trader, "trades", []) or [])
+    health_set("trade_count_total", int(len(tlist)))
+    if tlist:
+        lt = tlist[-1]
+        health_set("last_trade_ts", str(getattr(lt, "time", "")))
+        health_set("last_trade_symbol", str(getattr(lt, "symbol", "")))
+        health_set("last_trade_side", str(getattr(lt, "side", "")))
+        health_set("last_trade_reason", str(getattr(lt, "reason", "")))
+        try:
+            health_set("last_trade_price", float(getattr(lt, "price", 0.0) or 0.0))
+            health_set("last_trade_amount", float(getattr(lt, "amount", 0.0) or 0.0))
+        except Exception:
+            pass
+except Exception:
+    pass
+
+
+with st.sidebar.expander("Health / diagnostics", expanded=False):
+    h = _health()
+    now = time.time()
+    def _fmt_age(ts):
+        try:
+            ts = float(ts)
+            if ts <= 0:
+                return "-"
+            return f"{int(max(0, now-ts))}s ago"
+        except Exception:
+            return "-"
+
+    st.write({
+        "last_rerun": _fmt_age(h.get("last_rerun_ts", 0)),
+        "public_ohlcv": {
+            "last_ok": _fmt_age(h.get("last_public_ohlcv_ok_ts", 0)),
+            "last_attempt": _fmt_age(h.get("last_public_ohlcv_attempt_ts", 0)),
+            "symbol": h.get("last_public_ohlcv_symbol", ""),
+        },
+        "public_ticker": {
+            "last_ok": _fmt_age(h.get("last_public_ticker_ok_ts", 0)),
+            "last_attempt": _fmt_age(h.get("last_public_ticker_attempt_ts", 0)),
+            "symbol": h.get("last_public_ticker_symbol", ""),
+        },
+        "bitvavo_ban": {
+            "public_ban_until_ms": int(h.get("bitvavo_banned_until_ms", 0) or 0),
+            "live_ban_until_ms": int(h.get("live_ban_until_ms", 0) or 0),
+        },
+        "trades": {
+            "count_total": int(h.get("trade_count_total", 0) or 0),
+            "last": {
+                "ts": h.get("last_trade_ts", ""),
+                "symbol": h.get("last_trade_symbol", ""),
+                "side": h.get("last_trade_side", ""),
+                "reason": h.get("last_trade_reason", ""),
+                "price": h.get("last_trade_price", None),
+                "amount": h.get("last_trade_amount", None),
+            },
+        },
+        "last_event": {
+            "event": h.get("last_event", ""),
+            "age": _fmt_age(h.get("last_event_ts", 0)),
+            "detail": h.get("last_event_detail", ""),
+        },
+    })
+
+    # Per-symbol snapshot (last candle / close)
+    sym_info = h.get("symbols", {}) or {}
+    if sym_info:
+        st.caption("Per-symbol snapshot")
+        st.dataframe(pd.DataFrame.from_dict(sym_info, orient="index"), width="stretch", height=180)

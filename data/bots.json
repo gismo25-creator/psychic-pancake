@@ -29,7 +29,7 @@
     "id": "deb29b15",
     "name": "AXS01_copy",
     "symbol": "AXS/EUR",
-    "enabled": true,
+    "enabled": false,
     "budget_eur": 100.0,
     "grid_type": "Linear",
     "base_range_pct": 1.2,
