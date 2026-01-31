@@ -52,7 +52,7 @@ with st.sidebar.form("trainer_cfg_form"):
     fee_mode = st.sidebar.selectbox("Assume fills as", ["taker", "maker"], index=0)
     maker_fee = st.sidebar.number_input("Maker fee (%)", 0.0, 1.0, 0.10, step=0.01) / 100.0
     taker_fee = st.sidebar.number_input("Taker fee (%)", 0.0, 1.0, 0.25, step=0.01) / 100.0
-    slippage = st.sidebar.number_input("Slippage (%)", 0.0, 1.0, 0.05, step=0.01) / 100.0
+    slippage = st.sidebar.number_input("Slippage (%)", 0.0, 1.0, 0.01, step=0.01) / 100.0
 
     st.sidebar.subheader("Base strategy (used by trainer)")
 
@@ -91,7 +91,7 @@ with st.sidebar.form("trainer_cfg_form"):
     else:
         cycle_tp_enable = [False]
 
-    cycle_tp_pcts_str = st.sidebar.text_input("Cycle TP % candidates", value="0.20, 0.35, 0.50")
+    cycle_tp_pcts_str = st.sidebar.text_input("Cycle TP % candidates", value="0.60, 0.80, 1.00")
 
     # Parsed candidate lists used by SearchSpace
     range_candidates = _parse_csv_floats(range_candidates_str, default=[1.0])
@@ -224,32 +224,34 @@ with st.sidebar.form("trainer_cfg_form"):
         key="trainer_score_mode",
         help="PnL - λ·DD: linear penalty on drawdown. PnL / DD: risk-adjusted ratio (higher is better)."
     )
+    # NOTE: λ is applied to drawdown in *EUR* (DD_frac * start_cash) so it is commensurate with PnL (EUR).
+    # Keep the UI granular (step 0.5) so you can tune between e.g. 0–10 without being forced into 5-point jumps.
     lambda_dd = st.sidebar.slider(
-        "λ (drawdown penalty)",
+        "λ (drawdown penalty, EUR/EUR)",
         min_value=0.0,
-        max_value=500.0,
-        value=100.0,
-        step=5.0,
+        max_value=50.0,
+        value=5.0,
+        step=0.5,
         key="trainer_lambda_dd",
-        help="Used only for PnL - λ·DD mode."
+        help="Used only for PnL - λ·DD mode. DD is converted to EUR: DD_eur = max_drawdown * start_cash."
     )
 
     st.sidebar.subheader("Objective weights (scoring)")
     dd_penalty = st.sidebar.slider(
         "Drawdown penalty weight",
         min_value=0.0,
-        max_value=500.0,
-        value=100.0,
-        step=5.0,
+        max_value=20.0,
+        value=3.0,
+        step=0.5,
         key="trainer_dd_penalty",
         help="Higher penalizes drawdowns more strongly in the optimizer score."
     )
     trade_penalty = st.sidebar.slider(
         "Low-trade penalty weight",
         min_value=0.0,
-        max_value=500.0,
-        value=50.0,
-        step=5.0,
+        max_value=50.0,
+        value=3.0,
+        step=0.5,
         key="trainer_trade_penalty",
         help="Higher penalizes strategies with too few trades (helps avoid overfitting via inactivity)."
     )
@@ -346,12 +348,23 @@ if st.session_state.get("_force_load_bundle", False) and selected_bundle:
 
 
 
-def _risk_score(total_pnl: float, max_dd_frac: float) -> float:
-    dd = max(1e-9, float(max_dd_frac))
+def _risk_score(total_pnl: float, max_dd_frac: float, start_cash_eur: float) -> float:
+    """Compute a comparable score across candidates.
+
+    - PnL is in EUR.
+    - max_dd_frac is a fraction (e.g. 0.12 = 12% peak-to-trough).
+
+    For the linear penalty mode we convert drawdown to EUR so λ has a sensible scale.
+    """
     pnl = float(total_pnl)
+    dd_frac = max(1e-9, float(max_dd_frac))
+
     if str(score_mode).startswith("PnL /") or str(score_mode).startswith("PnL / DD"):
-        return pnl / dd
-    return pnl - float(lambda_dd) * dd
+        # Risk-adjusted: higher is better.
+        return pnl / dd_frac
+
+    dd_eur = dd_frac * max(1e-9, float(start_cash_eur))
+    return pnl - float(lambda_dd) * dd_eur
 
 
 def _get_num_trades(summ: dict) -> int:
@@ -458,9 +471,9 @@ if run:
     }
 
     base_profiles = {
-        "RANGE": {"range_pct": 1.0, "levels": 14, "order_size_mult": 1.0, "cycle_tp_enable": True, "cycle_tp_pct": 0.35},
+        "RANGE": {"range_pct": 1.0, "levels": 14, "order_size_mult": 1.0, "cycle_tp_enable": True, "cycle_tp_pct": 0.80},
         "TREND": {"range_pct": 2.0, "levels": 10, "order_size_mult": 0.8, "cycle_tp_enable": False, "cycle_tp_pct": 0.35},
-        "CHAOS": {"range_pct": 3.0, "levels": 8,  "order_size_mult": 0.6, "cycle_tp_enable": True, "cycle_tp_pct": 0.50},
+        "CHAOS": {"range_pct": 3.0, "levels": 8,  "order_size_mult": 0.6, "cycle_tp_enable": True, "cycle_tp_pct": 1.20},
         "WARMUP": {"range_pct": 1.0, "levels": 12, "order_size_mult": 0.8, "cycle_tp_enable": False, "cycle_tp_pct": 0.35},
     }
 
@@ -537,7 +550,7 @@ if run:
                         test_summ = summarize_run(equity_curve, trades_df)
                         tpnl = float(test_summ.get("total_pnl", 0.0))
                         tdd = float(test_summ.get("max_drawdown", 0.0))
-                        tscore = _risk_score(tpnl, tdd)
+                        tscore = _risk_score(tpnl, tdd, float(start_cash))
                         test_scores.append(tscore)
                         test_pnls.append(tpnl)
                         test_dds.append(tdd)
@@ -755,7 +768,7 @@ if run:
                         test_summ = summarize_run(equity_curve, trades_df)
                         tpnl = float(test_summ.get("total_pnl", 0.0))
                         tdd = float(test_summ.get("max_drawdown", 0.0))
-                        tscore = _risk_score(tpnl, tdd)
+                        tscore = _risk_score(tpnl, tdd, float(start_cash))
                         test_scores.append(tscore)
                         test_pnls.append(tpnl)
                         test_dds.append(tdd)
@@ -904,7 +917,7 @@ if run:
 
                     tpnl = float(test_summ.get("total_pnl", 0.0))
                     tdd = float(test_summ.get("max_drawdown", 0.0))
-                    tscore = _risk_score(tpnl, tdd)
+                    tscore = _risk_score(tpnl, tdd, float(start_cash))
 
                     test_scores.append(tscore)
                     test_pnls.append(tpnl)
@@ -938,17 +951,17 @@ if run:
                     "train_max_dd_pct": float(best_train.get("max_drawdown", 0.0)) * 100.0,
                     "train_win_rate_pct": float(best_train.get("win_rate", 0.0)) * 100.0 if best_train.get("win_rate") == best_train.get("win_rate") else float("nan"),
                     "train_trades": _get_num_trades(best_train),
-# Guard / filter settings (from base_cfg)
-"bb_mr_enable": bool(base_cfg.get("bb_mr_enable", False)),
-"bb_mr_window": int(base_cfg.get("bb_mr_window", 20)),
-"bb_mr_z": float(base_cfg.get("bb_mr_z", 0.0)),
-"trend_guard_enable": bool(base_cfg.get("trend_guard_enable", False)),
-"trend_lookback": int(base_cfg.get("trend_lookback", 0)),
-"trend_down_thresh_pct": float(base_cfg.get("trend_down_thresh_pct", 0.0)),
-"enable_time_stop": bool(base_cfg.get("enable_time_stop", False)),
-"time_stop_hours": float(base_cfg.get("time_stop_hours", 0.0)),
-"time_stop_mode": str(base_cfg.get("time_stop_mode", "")),
-"time_stop_tp_floor_pct": float(base_cfg.get("time_stop_tp_floor_pct", 0.0)),
+                    # Guard / filter settings (from base_cfg)
+                    "bb_mr_enable": bool(base_cfg.get("bb_mr_enable", False)),
+                    "bb_mr_window": int(base_cfg.get("bb_mr_window", 20)),
+                    "bb_mr_z": float(base_cfg.get("bb_mr_z", 0.0)),
+                    "trend_guard_enable": bool(base_cfg.get("trend_guard_enable", False)),
+                    "trend_lookback": int(base_cfg.get("trend_lookback", 0)),
+                    "trend_down_thresh_pct": float(base_cfg.get("trend_down_thresh_pct", 0.0)),
+                    "enable_time_stop": bool(base_cfg.get("enable_time_stop", False)),
+                    "time_stop_hours": float(base_cfg.get("time_stop_hours", 0.0)),
+                    "time_stop_mode": str(base_cfg.get("time_stop_mode", "")),
+                    "time_stop_tp_floor_pct": float(base_cfg.get("time_stop_tp_floor_pct", 0.0)),
                     "test_score_avg": float(pd.Series(test_scores).mean()),
                     "test_score_med": float(pd.Series(test_scores).median()),
                     "test_total_pnl_avg": float(pd.Series(test_pnls).mean()),

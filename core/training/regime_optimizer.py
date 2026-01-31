@@ -33,13 +33,29 @@ def objective_from_summary(
     dd_penalty: float = 3.0,
     trade_penalty: float = 0.0,
 ) -> float:
-    """Interpretable objective: maximize total pnl, penalize max drawdown (and optionally low activity)."""
+    """Interpretable objective used by the regime optimizer.
+
+    Key idea: keep units consistent.
+    - total_pnl is in quote currency (EUR)
+    - max_drawdown is a fraction (0..1) of equity
+
+    We convert drawdown to EUR via: dd_eur = max_drawdown * start_equity.
+
+    dd_penalty is therefore interpreted as: "EUR of penalty per EUR of drawdown".
+
+    trade_penalty softly discourages near-zero activity (to avoid selecting 'do nothing').
+    """
     total_pnl = float(summ.get("total_pnl", 0.0))
     max_dd = float(summ.get("max_drawdown", 0.0))  # fraction 0..1
+    start_eq = float(summ.get("start_equity", 0.0) or 0.0)
     trades = _num_trades(summ)
-    # penalize DD relative to pnl magnitude (avoid optimizing by just not trading)
-    dd_term = dd_penalty * (max_dd * max(1.0, abs(total_pnl) + 1.0))
-    trade_term = trade_penalty * (1.0 / max(1.0, trades))
+
+    dd_eur = max(0.0, max_dd) * max(0.0, start_eq)
+    dd_term = float(dd_penalty) * dd_eur
+
+    # A gentle activity penalty: approaches 0 as trades increase.
+    trade_term = float(trade_penalty) * (1.0 / max(1.0, trades))
+
     return total_pnl - dd_term - trade_term
 
 

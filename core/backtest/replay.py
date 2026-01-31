@@ -85,6 +85,9 @@ def run_backtest(
         d["atr"] = atr(d, 14)
         d["rv"] = realized_vol(d, 30)
         d["bb"] = bollinger_bandwidth(d, 20, 2.0)
+        # Bollinger mid/std used by BB mean-reversion filter
+        d["_bb_mid"] = d["close"].rolling(20, min_periods=20).mean()
+        d["_bb_std"] = d["close"].rolling(20, min_periods=20).std()
         d["adx"] = adx(d, 14)
         d["atr_pct"] = d["atr"] / d["close"].astype(float)
         d["raw_regime"] = [
@@ -189,10 +192,10 @@ def run_backtest(
         eng.enable_cycle_tp = bool((profile or {}).get("cycle_tp_enable", cfg.get("cycle_tp_enable", False)))
         eng.cycle_tp_pct = float((profile or {}).get("cycle_tp_pct", cfg.get("cycle_tp_pct", 0.35)))
 
-        eng.enable_time_stop = bool((profile or {}).get("time_stop_enable", cfg.get("time_stop_enable", True)))
+        eng.enable_time_stop = bool((profile or {}).get("enable_time_stop", (profile or {}).get("time_stop_enable", cfg.get("enable_time_stop", cfg.get("time_stop_enable", True)))))
         eng.time_stop_hours = float((profile or {}).get("time_stop_hours", cfg.get("time_stop_hours", 48.0)))
         eng.time_stop_mode = str((profile or {}).get("time_stop_mode", cfg.get("time_stop_mode", "DECAY_TO_TP"))).upper()
-        eng.time_stop_floor_tp_pct = float((profile or {}).get("time_stop_floor_tp_pct", cfg.get("time_stop_floor_tp_pct", 0.20)))
+        eng.time_stop_floor_tp_pct = float((profile or {}).get("time_stop_tp_floor_pct", (profile or {}).get("time_stop_floor_tp_pct", cfg.get("time_stop_tp_floor_pct", cfg.get("time_stop_floor_tp_pct", 0.20)))))
 
         # Optional rebuild on regime change: close position and reset grid/cycles
         if rebuild_on_regime_change:
@@ -211,8 +214,8 @@ def run_backtest(
         # Trend-guard: no buys in TREND-down (sells remain allowed)
         allow_buys = True
         if bool((profile or {}).get("trend_guard_enable", cfg.get("trend_guard_enable", True))) and str(eff_reg) == "TREND":
-            lb = int((profile or {}).get("trend_guard_lookback", cfg.get("trend_guard_lookback", 30)))
-            thr = float((profile or {}).get("trend_guard_thr_pct", cfg.get("trend_guard_thr_pct", 0.0)))
+            lb = int((profile or {}).get("trend_lookback", (profile or {}).get("trend_guard_lookback", cfg.get("trend_lookback", cfg.get("trend_guard_lookback", 30)))))
+            thr = float((profile or {}).get("trend_down_thresh_pct", (profile or {}).get("trend_guard_thr_pct", cfg.get("trend_down_thresh_pct", cfg.get("trend_guard_thr_pct", 0.0)))))
             if lb >= 2 and idx >= lb:
                 try:
                     ret_pct = (float(d["close"].iloc[idx]) / float(d["close"].iloc[idx - lb]) - 1.0) * 100.0
