@@ -1,0 +1,186 @@
+{
+  "schema_version": 1,
+  "created_at": "2026-02-01T22:14:07.260958+00:00",
+  "meta": {
+    "mode": "PER_SYMBOL",
+    "symbols": [
+      "XRP/EUR"
+    ],
+    "timeframe": "15m",
+    "lookback_days": 90,
+    "folds": 4,
+    "test_window_days": 14,
+    "step_days": 14,
+    "min_train_days": 67,
+    "max_evals_per_regime": 150,
+    "restarts": 6,
+    "rng_seed": 1336,
+    "fees": {
+      "maker": 0.001,
+      "taker": 0.0025,
+      "slippage": 0.0001,
+      "mode": "maker"
+    },
+    "git_commit": "",
+    "data_hashes": {},
+    "gates": {
+      "require_positive_test_pnl": true,
+      "min_worst_fold_test_pnl": 0.0,
+      "min_test_trades_per_fold": 20,
+      "min_test_trades_avg": 21,
+      "max_test_dd_cap_pct": 15.0
+    },
+    "gates_passed": false,
+    "gates_failed": [
+      "NEG_TEST_PNL_AVG",
+      "WORST_FOLD_PNL"
+    ],
+    "trainer_report_rows": [
+      {
+        "symbol": "XRP/EUR",
+        "status": "OK",
+        "train_total_pnl": -4.003898490028973,
+        "train_max_dd_pct": 0.9191209502460382,
+        "train_win_rate_pct": 100.0,
+        "train_trades": 310,
+        "bb_mr_enable": true,
+        "bb_mr_window": 20,
+        "bb_mr_z": 0.85,
+        "trend_guard_enable": true,
+        "trend_lookback": 48,
+        "trend_down_thresh_pct": 1.0,
+        "enable_time_stop": true,
+        "time_stop_hours": 24.0,
+        "time_stop_mode": "REDUCE_TO_TP",
+        "time_stop_tp_floor_pct": 0.4,
+        "test_score_avg": -26.380597430358428,
+        "test_score_med": -16.147605754803234,
+        "test_total_pnl_avg": -2.764353438306273,
+        "test_max_dd_pct_avg": 0.4723248798410431,
+        "folds_used": 4
+      }
+    ],
+    "trainer_fold_rows": [
+      {
+        "symbol": "XRP/EUR",
+        "fold": 1,
+        "train_start": "2025-11-03 21:45:00+00:00",
+        "train_end": "2025-12-07 21:30:00+00:00",
+        "test_start": "2025-12-07 21:30:00+00:00",
+        "test_end": "2025-12-21 21:30:00+00:00",
+        "test_total_pnl": -0.037665604417952636,
+        "test_max_dd_pct": 0.30194045308618905,
+        "test_score": -15.134688258727406,
+        "test_trades": 65,
+        "test_win_rate_pct": 100.0,
+        "buy_hold_return_pct": -7.740928775766342,
+        "outside_grid_pct": 8.779761904761903,
+        "max_pos_value_quote": 154.31883552,
+        "max_pos_base": 86.4144,
+        "blocked_total": 3155,
+        "blocked_top": "BB_MR_BLOCK: z=1.25 > -0.85(13); BB_MR_BLOCK: z=2.40 > -0.85(11); BB_MR_BLOCK: z=1.13 > -0.85(10)",
+        "worst_trade_pnl": 0.02222778857027219,
+        "worst_trade_reason": "CYCLE_TP"
+      },
+      {
+        "symbol": "XRP/EUR",
+        "fold": 2,
+        "train_start": "2025-11-03 21:45:00+00:00",
+        "train_end": "2025-12-21 21:30:00+00:00",
+        "test_start": "2025-12-21 21:30:00+00:00",
+        "test_end": "2026-01-04 21:30:00+00:00",
+        "test_total_pnl": -0.45337206262297514,
+        "test_max_dd_pct": 0.18435434193372346,
+        "test_score": -9.671089159309147,
+        "test_trades": 36,
+        "test_win_rate_pct": 100.0,
+        "buy_hold_return_pct": 9.464047160908407,
+        "outside_grid_pct": 7.366071428571429,
+        "max_pos_value_quote": 83.5897293,
+        "max_pos_base": 50.4084,
+        "blocked_total": 3083,
+        "blocked_top": "BB_MR_BLOCK: z=1.93 > -0.85(12); BB_MR_BLOCK: z=2.74 > -0.85(11); BB_MR_BLOCK: z=1.97 > -0.85(10)",
+        "worst_trade_pnl": 0.021788394614924655,
+        "worst_trade_reason": "CYCLE_TP"
+      },
+      {
+        "symbol": "XRP/EUR",
+        "fold": 3,
+        "train_start": "2025-11-03 21:45:00+00:00",
+        "train_end": "2026-01-04 21:30:00+00:00",
+        "test_start": "2026-01-04 21:30:00+00:00",
+        "test_end": "2026-01-18 21:30:00+00:00",
+        "test_total_pnl": -0.17783386742155471,
+        "test_max_dd_pct": 0.3396537876691501,
+        "test_score": -17.160523250879063,
+        "test_trades": 69,
+        "test_win_rate_pct": 100.0,
+        "buy_hold_return_pct": -0.6689805743716026,
+        "outside_grid_pct": 10.863095238095239,
+        "max_pos_value_quote": 105.19916227200001,
+        "max_pos_base": 57.6096,
+        "blocked_total": 2846,
+        "blocked_top": "BB_MR_BLOCK: z=1.86 > -0.85(12); BB_MR_BLOCK: z=1.99 > -0.85(11); BB_MR_BLOCK: z=2.88 > -0.85(11)",
+        "worst_trade_pnl": 0.02476901991305258,
+        "worst_trade_reason": "CYCLE_TP"
+      },
+      {
+        "symbol": "XRP/EUR",
+        "fold": 4,
+        "train_start": "2025-11-12 21:30:00+00:00",
+        "train_end": "2026-01-18 21:30:00+00:00",
+        "test_start": "2026-01-18 21:30:00+00:00",
+        "test_end": "2026-02-01 21:30:00+00:00",
+        "test_total_pnl": -10.388542218762609,
+        "test_max_dd_pct": 1.0633509366751095,
+        "test_score": -63.55608905251809,
+        "test_trades": 77,
+        "test_win_rate_pct": 100.0,
+        "buy_hold_return_pct": -24.05218812522896,
+        "outside_grid_pct": 16.133828996282528,
+        "max_pos_value_quote": 150.392165184,
+        "max_pos_base": 86.4144,
+        "blocked_total": 2609,
+        "blocked_top": "BB_MR_BLOCK: z=1.80 > -0.85(12); BB_MR_BLOCK: z=0.17 > -0.85(11); BB_MR_BLOCK: z=1.69 > -0.85(10)",
+        "worst_trade_pnl": 0.019365952356642957,
+        "worst_trade_reason": "CYCLE_TP"
+      }
+    ]
+  },
+  "profiles": {
+    "XRP/EUR": {
+      "use_regime_profiles": true,
+      "regime_profile_rebuild": true,
+      "regime_profiles": {
+        "RANGE": {
+          "range_pct": 2.5,
+          "levels": 8,
+          "order_size_mult": 0.6,
+          "cycle_tp_enable": true,
+          "cycle_tp_pct": 0.6
+        },
+        "TREND": {
+          "range_pct": 2.5,
+          "levels": 8,
+          "order_size_mult": 0.6,
+          "cycle_tp_enable": true,
+          "cycle_tp_pct": 0.8
+        },
+        "CHAOS": {
+          "range_pct": 2.5,
+          "levels": 8,
+          "order_size_mult": 1.2,
+          "cycle_tp_enable": true,
+          "cycle_tp_pct": 1.5
+        },
+        "WARMUP": {
+          "range_pct": 2.0,
+          "levels": 12,
+          "order_size_mult": 1.2,
+          "cycle_tp_enable": true,
+          "cycle_tp_pct": 3.0
+        }
+      }
+    }
+  }
+}

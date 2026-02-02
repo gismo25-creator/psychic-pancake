@@ -11,6 +11,212 @@ from core.backtest.replay import run_backtest
 from core.backtest.metrics import summarize_run
 from core.training.regime_optimizer import SearchSpace, staged_optimize_regime_profiles
 
+
+def _buy_hold_return_pct(df: pd.DataFrame) -> float:
+    try:
+        if df is None or df.empty:
+            return float("nan")
+        p0 = float(df["close"].iloc[0])
+        p1 = float(df["close"].iloc[-1])
+        if p0 <= 0:
+            return float("nan")
+        return (p1 / p0 - 1.0) * 100.0
+    except Exception:
+        return float("nan")
+
+
+def _diag_from_logs(trades_df: pd.DataFrame, decision_log: pd.DataFrame, trader) -> dict:
+    """Extract fold diagnostics for 'why it failed' panel."""
+    out = {
+        "outside_grid_pct": float("nan"),
+        "max_pos_value_quote": float("nan"),
+        "max_pos_base": float("nan"),
+        "blocked_total": 0,
+        "blocked_top": "",
+        "worst_trade_pnl": float("nan"),
+        "worst_trade_reason": "",
+    }
+
+    try:
+        if decision_log is not None and (not decision_log.empty):
+            if all(c in decision_log.columns for c in ["price", "grid_low", "grid_high"]):
+                p = decision_log["price"].astype(float)
+                gl = decision_log["grid_low"].astype(float)
+                gh = decision_log["grid_high"].astype(float)
+                mask = (p < gl) | (p > gh)
+                out["outside_grid_pct"] = float(mask.mean() * 100.0)
+            if "pos_value_quote" in decision_log.columns:
+                out["max_pos_value_quote"] = float(pd.Series(decision_log["pos_value_quote"].astype(float)).max())
+            if "pos_base" in decision_log.columns:
+                out["max_pos_base"] = float(pd.Series(decision_log["pos_base"].astype(float)).max())
+    except Exception:
+        pass
+
+    try:
+        if trades_df is not None and (not trades_df.empty) and ("side" in trades_df.columns):
+            if "pnl" in trades_df.columns:
+                sells = trades_df[trades_df["side"].astype(str).str.upper() == "SELL"].copy()
+                if not sells.empty:
+                    sells["pnl"] = sells["pnl"].astype(float)
+                    worst = sells.sort_values("pnl").iloc[0]
+                    out["worst_trade_pnl"] = float(worst.get("pnl", float("nan")))
+                    out["worst_trade_reason"] = str(worst.get("reason", ""))
+    except Exception:
+        pass
+
+    # Blocked intents / rejections are recorded into trader.trades with cash_delta_quote == 0
+    try:
+        blocked = []
+        for tr in getattr(trader, "trades", []) or []:
+            try:
+                if float(getattr(tr, "cash_delta_quote", 0.0)) == 0.0 and str(getattr(tr, "reason", "")) not in ("OK", ""):
+                    blocked.append(str(getattr(tr, "reason", "")))
+            except Exception:
+                continue
+        out["blocked_total"] = int(len(blocked))
+        if blocked:
+            vc = pd.Series(blocked).value_counts().head(3)
+            out["blocked_top"] = "; ".join([f"{idx}({int(val)})" for idx, val in vc.items()])
+    except Exception:
+        pass
+
+    return out
+
+def _likely_causes(worst_row: dict, start_cash: float) -> list:
+    """Heuristic root-cause labels for poor OOS performance (best-effort, interpretable).
+
+    Returns a list of dicts with:
+      - label: short title
+      - why: explanation
+      - fix: actionable mitigation
+      - confidence: Low/Medium/High (how strongly the data supports this cause)
+      - severity: Low/Medium/High (how damaging it likely is)
+    """
+    causes = []
+
+    def f(x, default=float("nan")):
+        try:
+            if x is None:
+                return default
+            if isinstance(x, str) and x.strip() == "":
+                return default
+            return float(x)
+        except Exception:
+            return default
+
+    tpnl = f(worst_row.get("test_total_pnl"))
+    dd_pct = f(worst_row.get("test_max_dd_pct"))
+    trades = int(f(worst_row.get("test_trades"), 0) or 0)
+    win = f(worst_row.get("test_win_rate_pct"))
+    bh = f(worst_row.get("buy_hold_return_pct"))
+    outside = f(worst_row.get("outside_grid_pct"))
+    max_pos = f(worst_row.get("max_pos_value_quote"))
+    blocked_total = int(f(worst_row.get("blocked_total"), 0) or 0)
+    worst_trade = f(worst_row.get("worst_trade_pnl"))
+
+    # Derived
+    dd_eur = (dd_pct / 100.0) * float(start_cash) if dd_pct == dd_pct else float("nan")
+    inv_ratio = (max_pos / float(start_cash)) if (max_pos == max_pos and start_cash > 0) else float("nan")
+    blocked_ratio = (blocked_total / max(1, trades))
+
+    def _conf_icon(conf: str) -> str:
+        # green = strong evidence, yellow = moderate, orange = weak
+        return {"High": "🟢", "Medium": "🟡", "Low": "🟠"}.get(str(conf), "🟡")
+
+    # 1) Runaway / price outside grid range
+    if outside == outside and outside >= 35.0:
+        severity = "High" if outside >= 55.0 else "Medium"
+        confidence = "High" if outside >= 60.0 else ("Medium" if outside >= 45.0 else "Low")
+        causes.append({
+            "label": "Runaway (prijs vaak buiten grid-range)",
+            "why": f"{outside:.1f}% van de candles lag buiten de actuele grid-range; mean-reversion edge valt dan vaak weg.",
+            "fix": "Zet ‘Rebuild grid on regime change’ aan, vergroot range% of verlaag levels; overweeg TREND-regime te pauzeren.",
+            "confidence": confidence,
+            "severity": severity,
+            "icon": _conf_icon(confidence),
+        })
+
+    # 2) Inventory tail-loss / overexposure
+    inv_flag = (inv_ratio == inv_ratio and inv_ratio >= 0.60)
+    tail_trade_flag = (worst_trade == worst_trade and worst_trade <= -0.03 * float(start_cash))
+    high_win_neg_flag = (dd_pct == dd_pct and dd_pct >= 12.0 and win == win and win >= 60.0 and tpnl == tpnl and tpnl < 0)
+
+    if inv_flag or tail_trade_flag or high_win_neg_flag:
+        severity = "High" if (inv_ratio == inv_ratio and inv_ratio >= 0.85) or (dd_pct == dd_pct and dd_pct >= 18.0) else "Medium"
+        score = 0
+        score += 2 if inv_flag else 0
+        score += 2 if tail_trade_flag else 0
+        score += 1 if high_win_neg_flag else 0
+        confidence = "High" if score >= 3 else ("Medium" if score == 2 else "Low")
+
+        details = []
+        if inv_ratio == inv_ratio:
+            details.append(f"max inventory ≈ {inv_ratio*100:.0f}% van start-cash")
+        if worst_trade == worst_trade:
+            details.append(f"worst trade {worst_trade:.2f} EUR")
+        if dd_eur == dd_eur:
+            details.append(f"DD ≈ {dd_eur:.0f} EUR")
+
+        causes.append({
+            "label": "Inventory tail-risk / overexposure",
+            "why": "Grid wint vaak klein, maar één move kan de inventory hard raken (" + ", ".join(details) + ").",
+            "fix": "Verlaag CHAOS/TREND order_size_mult, voeg inventory-cap of trailing-stop toe, en/of derisk bij snelle moves.",
+            "confidence": confidence,
+            "severity": severity,
+            "icon": _conf_icon(confidence),
+        })
+
+    # 3) Over-filtering / blocked orders
+    if blocked_total >= 50 or blocked_ratio >= 0.50:
+        severity = "Medium" if blocked_ratio < 0.80 else "High"
+        confidence = "High" if blocked_ratio >= 0.80 else ("Medium" if blocked_ratio >= 0.60 else "Low")
+        causes.append({
+            "label": "Over-filtering / veel blocked intents",
+            "why": f"{blocked_total} intents werden geblokt (≈ {blocked_ratio*100:.0f}% van trades). Filters kunnen edge wegdrukken of timing kapot maken.",
+            "fix": "Bekijk top block reasons; versoepel trend-guard/BB/RSI of maak ze regime-afhankelijk (strenger in CHAOS, milder in RANGE).",
+            "confidence": confidence,
+            "severity": severity,
+            "icon": _conf_icon(confidence),
+        })
+
+    # 4) Under-trading / onvoldoende samples
+    if trades > 0 and trades < 20:
+        severity = "Medium"
+        confidence = "High" if trades < 10 else "Medium"
+        causes.append({
+            "label": "Te weinig trades (onbetrouwbare score)",
+            "why": f"Slechts {trades} trades in de slechtste fold; statistisch instabiel en gevoelig voor één outlier.",
+            "fix": "Verlaag filters, vergroot lookback of verklein range/levels zodat er vaker fills ontstaan.",
+            "confidence": confidence,
+            "severity": severity,
+            "icon": _conf_icon(confidence),
+        })
+
+    # 5) Strategy/regime mismatch
+    if bh == bh and bh >= 6.0 and tpnl == tpnl and tpnl < 0 and outside == outside and outside < 35.0:
+        severity = "Medium"
+        confidence = "Medium" if bh >= 10.0 else "Low"
+        causes.append({
+            "label": "Regime mismatch (markt omhoog, grid toch omlaag)",
+            "why": f"Buy&Hold was +{bh:.2f}% terwijl de grid negatief was; vaak te vroeg uitverkopen + wegblijven, of verkeerde range-positionering.",
+            "fix": "Recenter/rebuild periodiek, verhoog Cycle TP of maak TREND-regime conservatiever (minder levels, lagere size).",
+            "confidence": confidence,
+            "severity": severity,
+            "icon": _conf_icon(confidence),
+        })
+
+    if not causes:
+        causes.append({
+            "label": "Geen dominante oorzaak gedetecteerd",
+            "why": "De signalen (outside-range, inventory, blocked intents) zijn niet duidelijk genoeg om één hoofdreden te labelen.",
+            "fix": "Kijk naar fold-by-fold logs: outside-range%, inventory pieken, block reasons en grootste verliezen.",
+            "confidence": "Low",
+            "severity": "Low",
+            "icon": _conf_icon("Low"),
+        })
+
+    return causes
+
 def _git_commit() -> str:
     """Best-effort git commit hash; returns empty string if git is unavailable."""
     try:
@@ -156,6 +362,41 @@ with st.sidebar.form("trainer_cfg_form"):
     )
 
     rng_seed = st.sidebar.number_input("Random seed", min_value=0, value=1337, step=1)
+
+    st.sidebar.subheader("Regime profile behavior")
+    rebuild_on_regime_change = st.sidebar.checkbox(
+        "Rebuild grid on regime change",
+        value=False,
+        help="If enabled, the simulator will close the current position for the asset and rebuild the grid when the effective regime changes. This often reduces tail-risk for grids that get 'stuck' after regime shifts.",
+    )
+
+    with st.sidebar.expander("Per-regime order size tuning (optional)", expanded=False):
+        st.caption("These settings help de-risk specific regimes (especially CHAOS) without affecting others.")
+        # Baseline multipliers (used as starting profiles before optimization)
+        base_osm_range = st.number_input("Baseline order_size_mult – RANGE", min_value=0.1, max_value=5.0, value=1.0, step=0.05)
+        base_osm_trend = st.number_input("Baseline order_size_mult – TREND", min_value=0.1, max_value=5.0, value=0.8, step=0.05)
+        base_osm_chaos = st.number_input("Baseline order_size_mult – CHAOS", min_value=0.1, max_value=5.0, value=0.6, step=0.05)
+        base_osm_warmup = st.number_input("Baseline order_size_mult – WARMUP", min_value=0.1, max_value=5.0, value=0.8, step=0.05)
+
+        st.markdown("**Candidate overrides (comma-separated)**")
+        st.caption("Leave empty to use the global 'Order size mult candidates'.")
+        osm_range_override = st.text_input("RANGE candidates override", value="")
+        osm_trend_override = st.text_input("TREND candidates override", value="")
+        osm_chaos_override = st.text_input("CHAOS candidates override", value="")
+        osm_warmup_override = st.text_input("WARMUP candidates override", value="")
+
+    # Parse per-regime override candidates (optional)
+    os_mults_by_regime = {}
+    if str(osm_range_override).strip():
+        os_mults_by_regime["RANGE"] = _parse_csv_floats(osm_range_override, default=os_mult_candidates)
+    if str(osm_trend_override).strip():
+        os_mults_by_regime["TREND"] = _parse_csv_floats(osm_trend_override, default=os_mult_candidates)
+    if str(osm_chaos_override).strip():
+        os_mults_by_regime["CHAOS"] = _parse_csv_floats(osm_chaos_override, default=os_mult_candidates)
+    if str(osm_warmup_override).strip():
+        os_mults_by_regime["WARMUP"] = _parse_csv_floats(osm_warmup_override, default=os_mult_candidates)
+    if not os_mults_by_regime:
+        os_mults_by_regime = None
 
     st.sidebar.subheader("Best-overall selection")
     global_best = st.sidebar.checkbox(
@@ -471,10 +712,10 @@ if run:
     }
 
     base_profiles = {
-        "RANGE": {"range_pct": 1.0, "levels": 14, "order_size_mult": 1.0, "cycle_tp_enable": True, "cycle_tp_pct": 0.80},
-        "TREND": {"range_pct": 2.0, "levels": 10, "order_size_mult": 0.8, "cycle_tp_enable": False, "cycle_tp_pct": 0.35},
-        "CHAOS": {"range_pct": 3.0, "levels": 8,  "order_size_mult": 0.6, "cycle_tp_enable": True, "cycle_tp_pct": 1.20},
-        "WARMUP": {"range_pct": 1.0, "levels": 12, "order_size_mult": 0.8, "cycle_tp_enable": False, "cycle_tp_pct": 0.35},
+        "RANGE": {"range_pct": 1.0, "levels": 14, "order_size_mult": float(base_osm_range), "cycle_tp_enable": True, "cycle_tp_pct": 0.80},
+        "TREND": {"range_pct": 2.0, "levels": 10, "order_size_mult": float(base_osm_trend), "cycle_tp_enable": False, "cycle_tp_pct": 0.35},
+        "CHAOS": {"range_pct": 3.0, "levels": 8,  "order_size_mult": float(base_osm_chaos), "cycle_tp_enable": True, "cycle_tp_pct": 1.20},
+        "WARMUP": {"range_pct": 1.0, "levels": 12, "order_size_mult": float(base_osm_warmup), "cycle_tp_enable": False, "cycle_tp_pct": 0.35},
     }
 
     trained = {}
@@ -545,7 +786,7 @@ if run:
                             enable_regime_profiles=True,
                             confirm_n=int(confirm_n),
                             cooldown_candles=int(cooldown_candles),
-                            rebuild_on_regime_change=False,
+                            rebuild_on_regime_change=bool(rebuild_on_regime_change),
                         )
                         test_summ = summarize_run(equity_curve, trades_df)
                         tpnl = float(test_summ.get("total_pnl", 0.0))
@@ -593,6 +834,8 @@ if run:
                     trade_penalty=float(trade_penalty),
                     search=search,
                     max_evals_per_regime=int(max_evals_per_regime),
+                    rebuild_on_regime_change=bool(rebuild_on_regime_change),
+                    order_size_mults_by_regime=os_mults_by_regime,
                     seed=int(seed_i),
                     progress_cb=None,
                 )
@@ -662,6 +905,8 @@ if run:
                     trade_penalty=float(trade_penalty),
                     search=search,
                     max_evals_per_regime=int(max_evals_per_regime),
+                    rebuild_on_regime_change=bool(rebuild_on_regime_change),
+                    order_size_mults_by_regime=os_mults_by_regime,
                     seed=int(best_profiles_seed),
                     progress_cb=None,
                 )
@@ -670,7 +915,7 @@ if run:
             for sym2 in sym_data.keys():
                 trained[sym2] = {
                     "use_regime_profiles": True,
-                    "regime_profile_rebuild": False,
+                    "regime_profile_rebuild": bool(rebuild_on_regime_change),
                     "regime_profiles": best_profiles,
                 }
 
@@ -763,7 +1008,7 @@ if run:
                             enable_regime_profiles=True,
                             confirm_n=int(confirm_n),
                             cooldown_candles=int(cooldown_candles),
-                            rebuild_on_regime_change=False,
+                            rebuild_on_regime_change=bool(rebuild_on_regime_change),
                         )
                         test_summ = summarize_run(equity_curve, trades_df)
                         tpnl = float(test_summ.get("total_pnl", 0.0))
@@ -804,6 +1049,8 @@ if run:
                         trade_penalty=float(trade_penalty),
                         search=search,
                         max_evals_per_regime=int(max_evals_per_regime),
+                        rebuild_on_regime_change=bool(rebuild_on_regime_change),
+                        order_size_mults_by_regime=os_mults_by_regime,
                         seed=int(seed_i),
                         progress_cb=None,
                     )
@@ -880,6 +1127,8 @@ if run:
                         trade_penalty=float(trade_penalty),
                         search=search,
                         max_evals_per_regime=int(max_evals_per_regime),
+                        rebuild_on_regime_change=bool(rebuild_on_regime_change),
+                        order_size_mults_by_regime=os_mults_by_regime,
                         seed=int(fallback_seed),
                         progress_cb=None,
                     )
@@ -911,9 +1160,13 @@ if run:
                         enable_regime_profiles=True,
                         confirm_n=int(confirm_n),
                         cooldown_candles=int(cooldown_candles),
-                        rebuild_on_regime_change=False,
+                        rebuild_on_regime_change=bool(rebuild_on_regime_change),
                     )
                     test_summ = summarize_run(equity_curve, trades_df)
+
+                    # Diagnostics used by 'Why it failed' panel
+                    diag = _diag_from_logs(trades_df, decision_log, trader)
+                    bh_ret_pct = _buy_hold_return_pct(te_df)
 
                     tpnl = float(test_summ.get("total_pnl", 0.0))
                     tdd = float(test_summ.get("max_drawdown", 0.0))
@@ -935,11 +1188,19 @@ if run:
                         "test_score": tscore,
                         "test_trades": _get_num_trades(test_summ),
                         "test_win_rate_pct": float(test_summ.get("win_rate", 0.0)) * 100.0 if test_summ.get("win_rate") == test_summ.get("win_rate") else float("nan"),
+                        "buy_hold_return_pct": bh_ret_pct,
+                        "outside_grid_pct": diag.get("outside_grid_pct"),
+                        "max_pos_value_quote": diag.get("max_pos_value_quote"),
+                        "max_pos_base": diag.get("max_pos_base"),
+                        "blocked_total": diag.get("blocked_total"),
+                        "blocked_top": diag.get("blocked_top"),
+                        "worst_trade_pnl": diag.get("worst_trade_pnl"),
+                        "worst_trade_reason": diag.get("worst_trade_reason"),
                     })
 
                 trained[sym] = {
                     "use_regime_profiles": True,
-                    "regime_profile_rebuild": False,
+                    "regime_profile_rebuild": bool(rebuild_on_regime_change),
                     "regime_profiles": profiles,
                 }
 
@@ -1024,6 +1285,31 @@ if run:
                 test_dd_worst = float(rep["test_max_dd_worst_pct"].max()) if "test_max_dd_worst_pct" in rep.columns else float(rep.get("test_dd_worst_pct", 0.0).max()) if "test_dd_worst_pct" in rep.columns else 0.0
                 test_trades_avg_val = float(rep["test_trades_avg"].mean()) if "test_trades_avg" in rep.columns else 0.0
 
+
+            # Fallback: some report variants don't include aggregated test_trades_avg / dd_worst.
+            # In that case, derive them from fold_rows to avoid false gate failures.
+            try:
+                if (test_trades_avg_val <= 0.0) and fold_rows:
+                    _trs = []
+                    for _r in fold_rows:
+                        _t = _r.get('test_trades', _r.get('trades', _r.get('n_test_trades', None)))
+                        if _t is not None:
+                            _trs.append(float(_t))
+                    if _trs:
+                        test_trades_avg_val = float(pd.Series(_trs).mean())
+
+                if ((test_dd_worst == 0.0) or (test_dd_worst is None)) and fold_rows:
+                    _dds = []
+                    for _r in fold_rows:
+                        _d = _r.get('test_max_dd_pct', _r.get('test_dd_worst_pct', _r.get('max_dd_pct', _r.get('dd_pct', None))))
+                        if _d is not None:
+                            _dds.append(float(_d))
+                    if _dds:
+                        # fold rows typically store dd in percent already
+                        test_dd_worst = float(max(_dds))
+            except Exception:
+                pass
+
             if gates["require_positive_test_pnl"] and (test_pnl_avg <= 0.0):
                 gate_fail.append("NEG_TEST_PNL_AVG")
             if test_trades_avg_val < gates["min_test_trades_avg"]:
@@ -1088,6 +1374,78 @@ if st.session_state.trainer_report is not None:
 if st.session_state.trainer_fold_details is not None:
     st.subheader("Fold details (test metrics per fold)")
     st.dataframe(st.session_state.trainer_fold_details, use_container_width=True, height=340)
+
+    # ----------------------------
+    # Why it failed panel (quick diagnostics)
+    # ----------------------------
+    fd = st.session_state.trainer_fold_details
+    if fd is not None and not fd.empty and "test_total_pnl" in fd.columns:
+        with st.expander("Why it failed (diagnostics)", expanded=True):
+            # Identify worst fold(s)
+            try:
+                tmp = fd.copy()
+                tmp["test_total_pnl"] = tmp["test_total_pnl"].astype(float)
+                worst = tmp.sort_values("test_total_pnl").iloc[0]
+                sym_w = str(worst.get("symbol", ""))
+                fold_w = int(float(worst.get("fold", 0))) if str(worst.get("fold", "")).strip() != "" else 0
+
+                st.markdown(
+                    f"**Worst fold:** {sym_w} fold {fold_w} | "
+                    f"PnL **{float(worst.get('test_total_pnl', 0.0)):.2f} EUR** | "
+                    f"Max DD **{float(worst.get('test_max_dd_pct', 0.0)):.2f}%** | "
+                    f"Trades **{int(float(worst.get('test_trades', 0) or 0))}**"
+                )
+
+
+                # Most likely causes (heuristics)
+                try:
+                    causes = _likely_causes(dict(worst), float(start_cash))
+                    if causes:
+                        st.markdown("### Meest waarschijnlijke oorzaken")
+                        for c in causes[:4]:
+                            icon = str(c.get("icon", ""))
+                            label = str(c.get("label", ""))
+                            why = str(c.get("why", ""))
+                            fix = str(c.get("fix", ""))
+                            conf = str(c.get("confidence", ""))
+                            sev = str(c.get("severity", ""))
+                            st.markdown(
+                                f"- {icon} **{label}** *(confidence: {conf}, severity: {sev})* — {why}  \n  *Aanpak:* {fix}"
+                            )
+                        st.caption("Legenda confidence: 🟢 hoog, 🟡 medium, 🟠 laag.")
+                except Exception:
+                    pass
+
+                # High-signal explanations
+                outside = worst.get("outside_grid_pct")
+                max_pos = worst.get("max_pos_value_quote")
+                blocked_total = int(float(worst.get("blocked_total", 0) or 0))
+                blocked_top = str(worst.get("blocked_top", ""))
+                worst_trade_pnl = worst.get("worst_trade_pnl")
+                worst_trade_reason = str(worst.get("worst_trade_reason", ""))
+                bh = worst.get("buy_hold_return_pct")
+
+                bullets = []
+                if bh == bh:
+                    bullets.append(f"Buy&Hold return in die testperiode: **{float(bh):.2f}%** (referentie)")
+                if outside == outside:
+                    bullets.append(f"% candles buiten huidige grid-range: **{float(outside):.1f}%** (grid kan ‘weg lopen’ / weinig mean-reversion edge)")
+                if max_pos == max_pos:
+                    bullets.append(f"Max positie-waarde (inventory) tijdens test: **€{float(max_pos):.2f}** (tail-risk indicator)")
+                if worst_trade_pnl == worst_trade_pnl:
+                    bullets.append(f"Grootste verliesgevende SELL trade: **€{float(worst_trade_pnl):.2f}** (reason: {worst_trade_reason or '—'})")
+                if blocked_total > 0:
+                    bullets.append(f"Blocked/rejected order intents: **{blocked_total}** (top: {blocked_top or '—'})")
+
+                if bullets:
+                    st.markdown("\n".join([f"- {b}" for b in bullets]))
+
+                st.caption(
+                    "Interpretatie: bij grids zie je vaak **hoge win-rate maar negatieve PnL** door enkele grote inventory-losses (tail events), "
+                    "of doordat de prijs langdurig buiten de grid-range blijft (trend/runaway)."
+                )
+            except Exception:
+                st.info("Diagnostics panel kon worst fold niet bepalen.")
 
 if st.session_state.trained_profiles:
     st.subheader("Optimized profiles")

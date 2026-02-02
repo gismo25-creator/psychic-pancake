@@ -901,7 +901,7 @@ for sym in symbols:
                     )
                     prof["cycle_tp_pct"] = st.slider(
                         f"{sym} {reg} Cycle TP (%)",
-                        0.05, 2.0,
+                        0.05, 5.0,
                         float(prof.get("cycle_tp_pct", 0.35)),
                         step=0.05,
                         disabled=(not bool(prof.get("cycle_tp_enable", False))),
@@ -1173,6 +1173,7 @@ if use_bot_manager:
         st.session_state.bot_engines = {}
 
     global_fee_sig = (maker_fee, taker_fee, slippage_pct, fee_mode)
+    bots_by_id = {str(x.get('id','')).strip(): x for x in (bots or [])}
 
     bot_summaries = {}
     for b in bots:
@@ -1227,8 +1228,93 @@ if use_bot_manager:
 
         eng = st.session_state.bot_engines[eng_key]
 
+
+        # --- Bot-level trailing stop (inventory protection) + cooldown to avoid immediate re-buy
+        if "bot_trailing_state" not in st.session_state:
+            st.session_state.bot_trailing_state = {}
+
+        tstate = (st.session_state.bot_trailing_state.get(bot_id, {}) or {}).copy()
+        trailing_enabled = bool(b.get("trailing_enabled", False))
+        activation_pct = float(b.get("trailing_activation_pct", 1.0) or 0.0)
+        trail_pct = float(b.get("trailing_trail_pct", 3.0) or 0.0)
+        cooldown_cfg = int(b.get("trailing_cooldown_bars", 12) or 0)
+
+        # Maintain cooldown in bars (decrement when ts advances)
+        last_ts_seen = tstate.get("last_ts_seen")
+        if last_ts_seen != ts:
+            tstate["last_ts_seen"] = ts
+            tstate["cooldown_bars"] = max(0, int(tstate.get("cooldown_bars", 0) or 0) - 1)
+
+        allow_buys = True
+        if trailing_enabled and int(tstate.get("cooldown_bars", 0) or 0) > 0:
+            allow_buys = False
+
+        # Update trailing state + trigger flatten (paper/dry-run only)
+        if trailing_enabled and trail_pct > 0:
+            pos_amt = float(trader_b.positions.get(base, 0.0) or 0.0)
+            avg_entry = trader_b.avg_entry_price(base)
+
+            if pos_amt > 1e-12 and avg_entry is not None and float(avg_entry) > 0:
+                # activation
+                if not bool(tstate.get("active", False)):
+                    if activation_pct <= 0.0 or float(price) >= float(avg_entry) * (1.0 + activation_pct / 100.0):
+                        tstate["active"] = True
+                        tstate["peak"] = float(price)
+                else:
+                    tstate["peak"] = max(float(tstate.get("peak", price) or price), float(price))
+
+                # trigger
+                if bool(tstate.get("active", False)):
+                    peak = float(tstate.get("peak", price) or price)
+                    stop_level = peak * (1.0 - float(trail_pct) / 100.0)
+                    tstate["stop_level"] = float(stop_level)
+
+                    if st.session_state.trading_enabled and float(price) <= float(stop_level):
+                        # Close full position (single base in this bot)
+                        pos_before = float(trader_b.positions.get(base, 0.0) or 0.0)
+                        cb_before = float(trader_b.cost_basis.get(base, 0.0) or 0.0)
+                        avg_cost = (cb_before / pos_before) if pos_before > 0 else 0.0
+
+                        tr = trader_b.sell(sym, float(price), float(pos_before), ts, reason="TRAIL_STOP")
+                        if tr is not None:
+                            pnl = float(tr.cash_delta_quote) - float(avg_cost) * float(pos_before)
+                            # Also push into engine trade log so UI charts/tables show the stop event
+                            eng.trades.append({
+                                "time": tr.time, "symbol": tr.symbol, "side": tr.side,
+                                "price": float(tr.price), "amount": float(tr.amount),
+                                "fee_rate": float(tr.fee_rate), "fee_paid": float(tr.fee_paid_quote),
+                                "cash_delta": float(tr.cash_delta_quote),
+                                "pnl": float(pnl),
+                                "reason": tr.reason,
+                            })
+
+                        # Reset grid cycles to avoid stale open_cycles after forced flatten
+                        try:
+                            eng.reset_open_cycles()
+                        except Exception:
+                            pass
+
+                        # Cooldown: pause buys for N bars; reset trailing tracker
+                        tstate["cooldown_bars"] = int(cooldown_cfg)
+                        tstate["active"] = False
+                        tstate["peak"] = None
+
+            else:
+                # No inventory -> reset trailing tracker
+                tstate["active"] = False
+                tstate["peak"] = None
+                tstate["stop_level"] = None
+        else:
+            # feature disabled
+            tstate["active"] = False
+            tstate["peak"] = None
+            tstate["stop_level"] = None
+            tstate["cooldown_bars"] = 0
+
+        st.session_state.bot_trailing_state[bot_id] = tstate
+
         if st.session_state.trading_enabled:
-            eng.check_price(price, trader_b, ts, allow_buys=True)
+            eng.check_price(price, trader_b, ts, allow_buys=allow_buys)
 
         eq_b = trader_b.equity({sym: price})
         bot_summaries[bot_id] = {
@@ -1268,6 +1354,29 @@ if use_bot_manager:
             eng = st.session_state.bot_engines[f"botengine:{bot_id}"]
 
             st.caption(f"Budget: {row['budget']:.2f} EUR | Cash: {row['cash']:.2f} | Equity: {row['equity']:.2f} | Pos: {row['pos_base']:.6f} {base}")
+
+            # Trailing stop status (if enabled for this bot)
+            try:
+                bcfg = bots_by_id.get(str(bot_id), {}) or {}
+                if bool(bcfg.get("trailing_enabled", False)):
+                    ts_state = (st.session_state.get("bot_trailing_state", {}) or {}).get(str(bot_id), {}) or {}
+                    active = bool(ts_state.get("active", False))
+                    peak = ts_state.get("peak")
+                    stop_level = ts_state.get("stop_level")
+                    cd = int(ts_state.get("cooldown_bars", 0) or 0)
+                    act_pct = float(bcfg.get("trailing_activation_pct", 0.0) or 0.0)
+                    tr_pct = float(bcfg.get("trailing_trail_pct", 0.0) or 0.0)
+                    if peak is not None and stop_level is not None:
+                        st.caption(
+                            f"Trailing stop: {'ACTIVE' if active else 'idle'} | activation {act_pct:.2f}% | trail {tr_pct:.2f}% | "
+                            f"peak {float(peak):.2f} | stop {float(stop_level):.2f} | cooldown {cd} bars"
+                        )
+                    else:
+                        st.caption(
+                            f"Trailing stop: {'ACTIVE' if active else 'idle'} | activation {act_pct:.2f}% | trail {tr_pct:.2f}% | cooldown {cd} bars"
+                        )
+            except Exception:
+                pass
 
             fig = go.Figure(go.Candlestick(
                 x=df["timestamp"], open=df["open"], high=df["high"], low=df["low"], close=df["close"], name="Price"

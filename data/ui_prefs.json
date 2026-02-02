@@ -1,6 +1,6 @@
 {
   "exec_mode": "Simulation (paper)",
-  "manual_symbols_input": "BTC/EUR, ETH/EUR",
+  "manual_symbols_input": "SOL/EUR",
   "refresh_sec": 15,
   "timeframe": "5m",
   "use_bot_manager": false

@@ -1,0 +1,154 @@
+{
+  "schema_version": 1,
+  "created_at": "2026-01-31T23:09:34.937087+00:00",
+  "meta": {
+    "mode": "PER_SYMBOL",
+    "symbols": [
+      "SOL/EUR"
+    ],
+    "timeframe": "15m",
+    "lookback_days": 90,
+    "folds": 4,
+    "test_window_days": 14,
+    "step_days": 14,
+    "min_train_days": 30,
+    "max_evals_per_regime": 60,
+    "restarts": 6,
+    "rng_seed": 1336,
+    "fees": {
+      "maker": 0.001,
+      "taker": 0.0025,
+      "slippage": 0.0001,
+      "mode": "maker"
+    },
+    "git_commit": "",
+    "data_hashes": {},
+    "gates": {
+      "require_positive_test_pnl": true,
+      "min_worst_fold_test_pnl": 0.0,
+      "min_test_trades_per_fold": 20,
+      "min_test_trades_avg": 18,
+      "max_test_dd_cap_pct": 15.0
+    },
+    "gates_passed": false,
+    "gates_failed": [
+      "NEG_TEST_PNL_AVG",
+      "WORST_FOLD_PNL"
+    ],
+    "trainer_report_rows": [
+      {
+        "symbol": "SOL/EUR",
+        "status": "OK",
+        "train_total_pnl": 11.679824558455152,
+        "train_max_dd_pct": 1.5398344501854169,
+        "train_win_rate_pct": 90.9090909090909,
+        "train_trades": 135,
+        "bb_mr_enable": true,
+        "bb_mr_window": 20,
+        "bb_mr_z": 0.75,
+        "trend_guard_enable": true,
+        "trend_lookback": 48,
+        "trend_down_thresh_pct": 1.0,
+        "enable_time_stop": true,
+        "time_stop_hours": 24.0,
+        "time_stop_mode": "BREAK_EVEN_NET",
+        "time_stop_tp_floor_pct": 0.25,
+        "test_score_avg": -3.253454869046408,
+        "test_score_med": -4.931049241453707,
+        "test_total_pnl_avg": -3.253454869046408,
+        "test_max_dd_pct_avg": 2.2821891073720417,
+        "folds_used": 4
+      }
+    ],
+    "trainer_fold_rows": [
+      {
+        "symbol": "SOL/EUR",
+        "fold": 1,
+        "train_start": "2025-11-02 23:15:00+00:00",
+        "train_end": "2025-12-02 21:45:00+00:00",
+        "test_start": "2025-12-02 21:45:00+00:00",
+        "test_end": "2025-12-16 21:45:00+00:00",
+        "test_total_pnl": -13.21964760080266,
+        "test_max_dd_pct": 3.4659785389419357,
+        "test_score": -13.21964760080266,
+        "test_trades": 74,
+        "test_win_rate_pct": 100.0
+      },
+      {
+        "symbol": "SOL/EUR",
+        "fold": 2,
+        "train_start": "2025-11-16 21:45:00+00:00",
+        "train_end": "2025-12-16 21:45:00+00:00",
+        "test_start": "2025-12-16 21:45:00+00:00",
+        "test_end": "2025-12-30 21:45:00+00:00",
+        "test_total_pnl": 0.8626518087330624,
+        "test_max_dd_pct": 1.734323026730188,
+        "test_score": 0.8626518087330624,
+        "test_trades": 57,
+        "test_win_rate_pct": 100.0
+      },
+      {
+        "symbol": "SOL/EUR",
+        "fold": 3,
+        "train_start": "2025-11-30 21:45:00+00:00",
+        "train_end": "2025-12-30 21:45:00+00:00",
+        "test_start": "2025-12-30 21:45:00+00:00",
+        "test_end": "2026-01-13 21:45:00+00:00",
+        "test_total_pnl": 10.067926607524441,
+        "test_max_dd_pct": 0.9468857471002284,
+        "test_score": 10.067926607524441,
+        "test_trades": 56,
+        "test_win_rate_pct": 87.5
+      },
+      {
+        "symbol": "SOL/EUR",
+        "fold": 4,
+        "train_start": "2025-12-14 21:45:00+00:00",
+        "train_end": "2026-01-13 21:45:00+00:00",
+        "test_start": "2026-01-13 21:45:00+00:00",
+        "test_end": "2026-01-27 21:45:00+00:00",
+        "test_total_pnl": -10.724750291640476,
+        "test_max_dd_pct": 2.981569116715816,
+        "test_score": -10.724750291640476,
+        "test_trades": 61,
+        "test_win_rate_pct": 100.0
+      }
+    ]
+  },
+  "profiles": {
+    "SOL/EUR": {
+      "use_regime_profiles": true,
+      "regime_profile_rebuild": true,
+      "regime_profiles": {
+        "RANGE": {
+          "range_pct": 2.5,
+          "levels": 8,
+          "order_size_mult": 0.6,
+          "cycle_tp_enable": true,
+          "cycle_tp_pct": 2.5
+        },
+        "TREND": {
+          "range_pct": 2.5,
+          "levels": 8,
+          "order_size_mult": 0.4,
+          "cycle_tp_enable": true,
+          "cycle_tp_pct": 2.5
+        },
+        "CHAOS": {
+          "range_pct": 2.0,
+          "levels": 12,
+          "order_size_mult": 0.3,
+          "cycle_tp_enable": true,
+          "cycle_tp_pct": 2.5
+        },
+        "WARMUP": {
+          "range_pct": 2.5,
+          "levels": 14,
+          "order_size_mult": 1.2,
+          "cycle_tp_enable": true,
+          "cycle_tp_pct": 1.5
+        }
+      }
+    }
+  }
+}

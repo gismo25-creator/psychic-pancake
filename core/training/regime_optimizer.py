@@ -98,6 +98,8 @@ def staged_optimize_regime_profiles(
     trade_penalty: float = 0.0,
     search: Optional[SearchSpace] = None,
     max_evals_per_regime: Optional[int] = 150,
+    rebuild_on_regime_change: bool = False,
+    order_size_mults_by_regime: Optional[Dict[str, List[float]]] = None,
     seed: int = 1337,
     progress_cb: Optional[Callable[[str, int, int], None]] = None,
 ) -> Tuple[Dict[str, Dict], Dict]:
@@ -137,7 +139,7 @@ def staged_optimize_regime_profiles(
         enable_regime_profiles=True,
         confirm_n=int(confirm_n),
         cooldown_candles=int(cooldown_candles),
-        rebuild_on_regime_change=False,
+        rebuild_on_regime_change=bool(rebuild_on_regime_change),
     )
     baseline = summarize_run(equity_curve, trades_df)
 
@@ -151,7 +153,18 @@ def staged_optimize_regime_profiles(
         best_reg_score = float(best_overall["objective"])
         best_reg_summary = dict(best_overall)
 
-        cand_list, total = _candidate_tuples(base_cfg, best_reg_profile, search)
+        # Allow per-regime candidate overrides (useful to de-risk CHAOS, widen TREND, etc.)
+        search_reg = search
+        if order_size_mults_by_regime and reg in order_size_mults_by_regime:
+            search_reg = SearchSpace(
+                range_pcts=list(search.range_pcts),
+                levels=list(search.levels),
+                order_size_mults=[float(x) for x in order_size_mults_by_regime[reg]],
+                cycle_tp_enable=list(search.cycle_tp_enable),
+                cycle_tp_pcts=list(search.cycle_tp_pcts),
+            )
+
+        cand_list, total = _candidate_tuples(base_cfg, best_reg_profile, search_reg)
 
         # Sample if needed
         order = list(range(total))
@@ -189,7 +202,7 @@ def staged_optimize_regime_profiles(
                 enable_regime_profiles=True,
                 confirm_n=int(confirm_n),
                 cooldown_candles=int(cooldown_candles),
-                rebuild_on_regime_change=False,
+                rebuild_on_regime_change=bool(rebuild_on_regime_change),
             )
             summ = summarize_run(equity_curve, trades_df)
             score = objective_from_summary(summ, dd_penalty=dd_penalty, trade_penalty=trade_penalty)

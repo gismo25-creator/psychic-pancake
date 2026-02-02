@@ -247,6 +247,13 @@ def run_backtest(
         used_levels = (int((profile or {}).get("levels", cfg.get("base_levels", 10)))
                        if str(cfg.get("grid_type", "Linear")) == "Linear" else None)
 
+        # Diagnostics snapshot
+        base = sym.split("/")[0]
+        pos_base = float(trader.positions.get(base, 0.0))
+        pos_value_quote = pos_base * float(px)
+        grid_low = float(min(eng.grid)) if getattr(eng, "grid", None) else float("nan")
+        grid_high = float(max(eng.grid)) if getattr(eng, "grid", None) else float("nan")
+
         decision_rows.append({
             "timestamp": ts,
             "symbol": sym,
@@ -262,6 +269,11 @@ def run_backtest(
             "order_size_eff": float(eng.order_size),
             "cycle_tp_enable": bool(getattr(eng, "enable_cycle_tp", False)),
             "cycle_tp_pct": float(getattr(eng, "cycle_tp_pct", 0.35)),
+            "grid_low": grid_low,
+            "grid_high": grid_high,
+            "pos_base": pos_base,
+            "pos_value_quote": pos_value_quote,
+            "cash_quote": float(trader.cash),
         })
 
         eq = trader.equity(mark_prices)

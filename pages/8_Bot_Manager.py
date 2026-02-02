@@ -32,6 +32,10 @@ def _default_bot(symbol: str = "BTC/EUR") -> Dict[str, Any]:
         "order_size_base": 0.001,
         "dynamic_spacing": True,
         "tp_floor_pct": 0.35,
+        "trailing_enabled": False,
+        "trailing_activation_pct": 1.0,
+        "trailing_trail_pct": 3.0,
+        "trailing_cooldown_bars": 12,
     }
 
 def _sanitize(bot: Dict[str, Any]) -> Dict[str, Any]:
@@ -48,6 +52,10 @@ def _sanitize(bot: Dict[str, Any]) -> Dict[str, Any]:
     b["order_size_base"] = float(b.get("order_size_base", 0.0))
     b["dynamic_spacing"] = bool(b.get("dynamic_spacing", True))
     b["tp_floor_pct"] = float(b.get("tp_floor_pct", 0.0))
+    b["trailing_enabled"] = bool(b.get("trailing_enabled", False))
+    b["trailing_activation_pct"] = float(b.get("trailing_activation_pct", 1.0) or 0.0)
+    b["trailing_trail_pct"] = float(b.get("trailing_trail_pct", 3.0) or 0.0)
+    b["trailing_cooldown_bars"] = int(b.get("trailing_cooldown_bars", 12) or 0)
     return b
 
 c1, c2, c3 = st.columns([1,1,3])
@@ -106,6 +114,9 @@ for b in bots:
         "levels": bb["base_levels"],
         "order_size_base": bb["order_size_base"],
         "tp_floor_pct": bb["tp_floor_pct"],
+        "trailing_enabled": bb.get("trailing_enabled", False),
+        "trail_pct": bb.get("trailing_trail_pct", 0.0),
+        "activation_pct": bb.get("trailing_activation_pct", 0.0),
     })
 st.dataframe(rows, use_container_width=True, height=240)
 
@@ -135,6 +146,44 @@ for b in bots:
                 st.caption("Fibonacci levels are implicit.")
         with ec7:
             bb["order_size_base"] = st.number_input("Order size (base)", min_value=0.0, value=float(bb["order_size_base"]), format="%.6f", key=f"os_{bb['id']}")
+
+        st.markdown("### Trailing stop (inventory bescherming)")
+        tc1, tc2, tc3, tc4 = st.columns([1.2, 1.2, 1.2, 1.4])
+        with tc1:
+            bb["trailing_enabled"] = st.checkbox(
+                "Enable trailing stop",
+                value=bool(bb.get("trailing_enabled", False)),
+                key=f"tr_en_{bb['id']}",
+                help="Als de prijs na activatie X% terugvalt vanaf de piek, wordt de volledige inventory gesloten (paper/dry-run)."
+            )
+        with tc2:
+            bb["trailing_activation_pct"] = st.number_input(
+                "Activation (%)",
+                min_value=0.0, max_value=25.0,
+                value=float(bb.get("trailing_activation_pct", 1.0) or 0.0),
+                step=0.1,
+                key=f"tr_act_{bb['id']}",
+                help="Trailing start pas nadat de prijs ≥ avg-entry * (1 + activation%). 0 = direct actief zodra er inventory is."
+            )
+        with tc3:
+            bb["trailing_trail_pct"] = st.number_input(
+                "Trail distance (%)",
+                min_value=0.1, max_value=50.0,
+                value=float(bb.get("trailing_trail_pct", 3.0) or 0.0),
+                step=0.1,
+                key=f"tr_pct_{bb['id']}",
+                help="Stop = peak_price * (1 - trail%). Bijvoorbeeld 3.0%."
+            )
+        with tc4:
+            bb["trailing_cooldown_bars"] = st.number_input(
+                "Cooldown (bars)",
+                min_value=0, max_value=500,
+                value=int(bb.get("trailing_cooldown_bars", 12) or 0),
+                step=1,
+                key=f"tr_cd_{bb['id']}",
+                help="Aantal candles waarin BUYs gepauzeerd worden na een trailing-stop (voorkomt direct re-buy)."
+            )
+
 
         bc1, bc2, bc3, bc4 = st.columns([1,1,1,3])
         with bc1:

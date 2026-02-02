@@ -68,7 +68,7 @@ if enable_profiles:
                 profiles[reg]["levels"] = st.slider(f"{reg} levels (Linear)", 3, 30, int(profiles[reg]["levels"]))
             profiles[reg]["order_size_mult"] = st.slider(f"{reg} order size mult", 0.1, 3.0, float(profiles[reg]["order_size_mult"]), step=0.1)
             profiles[reg]["cycle_tp_enable"] = st.checkbox(f"{reg} enable Cycle TP", value=bool(profiles[reg]["cycle_tp_enable"]))
-            profiles[reg]["cycle_tp_pct"] = st.slider(f"{reg} Cycle TP (%)", 0.05, 2.0, float(profiles[reg]["cycle_tp_pct"]), step=0.05, disabled=(not bool(profiles[reg]["cycle_tp_enable"])))
+            profiles[reg]["cycle_tp_pct"] = st.slider(f"{reg} Cycle TP (%)", 0.05, 5.0, float(profiles[reg]["cycle_tp_pct"]), step=0.05, disabled=(not bool(profiles[reg]["cycle_tp_enable"])))
 
 st.sidebar.subheader("Grid params (backtest)")
 grid_type = st.sidebar.selectbox("Grid type", ["Linear", "Fibonacci"], index=0)
@@ -134,7 +134,12 @@ if run:
         cooldown_candles=int(cooldown_candles),
         rebuild_on_regime_change=bool(rebuild_on_change),
     )
-    # Rendering moved below to persist results across reruns
+    # Persist results so they remain visible after widget changes / reruns
+    st.session_state.bt_results = {
+        "trades_df": trades_df,
+        "equity_curve": equity_curve,
+        "decision_log": decision_log,
+    }
 
 
 # ----------------------------
