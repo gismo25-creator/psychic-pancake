@@ -283,7 +283,17 @@ live_enabled = False
 live_missing = []
 live_ack = False
 
+# Developer/escape hatch: allow Live without an ACTIVE bundle (NOT recommended).
+# This used to exist in earlier builds but was missing in this file, causing a NameError.
+allow_dryrun_without_active = False
+
 if exec_mode.startswith("Live"):
+    # Optional override for advanced testing only. Keep OFF for normal operation.
+    allow_dryrun_without_active = st.sidebar.checkbox(
+        "Allow Live without ACTIVE bundle (dangerous)",
+        value=False,
+        help="For testing only. When OFF, Live requires a sanity_passed ACTIVE bundle from Profile Manager.",
+    )
     if active_bundle is None and (not allow_dryrun_without_active):
         live_allowed = False
         st.sidebar.error("Live gate: no ACTIVE bundle found. Promote a bundle to ACTIVE in Profile Manager.")
