@@ -5,6 +5,7 @@ import pandas as pd
 import streamlit as st
 
 from core.profiles.registry import make_bundle, save_bundle, stable_hash_df, ensure_store_dir, list_bundles, load_bundle
+from core.profiles.library import save_profile as save_profile_to_library
 
 from core.backtest.data_store import load_or_fetch
 from core.backtest.replay import run_backtest
@@ -529,6 +530,14 @@ auto_reload_last = st.sidebar.checkbox(
     "Auto-reload last saved bundle",
     value=True,
     help="If the session reruns/reconnects, reload the most recent saved bundle so results remain visible."
+)
+
+# --- Simple profile library (easier than governance for day-to-day use)
+st.sidebar.subheader("Profile Library (simple)")
+auto_save_to_library = st.sidebar.checkbox(
+    "Auto-save PASS profiles to Library",
+    value=True,
+    help="If enabled, after a training run that passes gates, each symbol profile is saved to a simple library and becomes selectable on the Live page."
 )
 
 bundles = list_bundles(store_dir)
@@ -1352,6 +1361,33 @@ if run:
     default_name = f"bundle_{meta['mode'].lower()}_{timeframe}_{pd.Timestamp.utcnow().strftime('%Y%m%d_%H%M%S')}"
     saved_path = save_bundle(bundle, store_dir=store_dir, name=default_name)
     st.session_state.last_bundle_path = saved_path
+
+    # Optionally: save to simple library (per symbol) so Live can select it easily.
+    try:
+        if bool(auto_save_to_library) and bool(meta.get("gates_passed", False)):
+            created_at = str(bundle.get("created_at") or meta.get("created_at") or pd.Timestamp.utcnow().isoformat())
+            # Optional score hint: prefer test pnl avg if present
+            score_hint = None
+            try:
+                score_hint = float(meta.get("test_total_pnl_avg", meta.get("test_pnl_avg", None))) if meta.get("test_total_pnl_avg", meta.get("test_pnl_avg", None)) is not None else None
+            except Exception:
+                score_hint = None
+            trained_profiles = (bundle.get("profiles") or {})
+            for sym, cfg in trained_profiles.items():
+                try:
+                    save_profile_to_library(
+                        symbol=str(sym),
+                        timeframe=str(timeframe),
+                        profile_cfg=dict(cfg),
+                        created_at=created_at,
+                        source_bundle=str(Path(saved_path).name),
+                        gates_passed=True,
+                        score_hint=score_hint,
+                    )
+                except Exception:
+                    pass
+    except Exception:
+        pass
 
     st.success(f"Saved profile bundle: {saved_path}")
     st.download_button(

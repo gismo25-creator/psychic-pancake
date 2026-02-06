@@ -1,7 +1,7 @@
 {
   "exec_mode": "Simulation (paper)",
-  "manual_symbols_input": "SOL/EUR",
+  "manual_symbols_input": "",
   "refresh_sec": 15,
   "timeframe": "5m",
-  "use_bot_manager": false
+  "use_bot_manager": true
 }

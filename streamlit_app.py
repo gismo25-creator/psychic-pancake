@@ -94,6 +94,7 @@ from core.ml.volatility import atr, realized_vol, bollinger_bandwidth, adx, vol_
 from core.ml.regime import classify_regime
 
 from core.profiles.registry import active_path, load_bundle, validate_bundle
+from core.profiles.library import list_entries as list_library_entries, load_profile as load_library_profile
 
 
 # ----------------------------
@@ -476,7 +477,79 @@ if not symbols:
     st.stop()
 timeframe = st.sidebar.selectbox("Timeframe", ["1m", "5m", "15m"], index=1)
 
+# ----------------------------
+# Profiles (simple): load a per-pair profile from the library
+# ----------------------------
+with st.sidebar.expander("Profiles (simple)", expanded=False):
+    st.caption("Selecteer een opgeslagen Trainer-profiel en apply direct op de Live-config.")
+    if symbols:
+        sym_sel = st.selectbox("Symbol", options=symbols, key=k_live("profile_lib_symbol"))
+
+        auto_apply = st.checkbox(
+            "Auto-apply bij selectie",
+            value=False,
+            help="Als dit aan staat, wordt het gekozen library-profiel direct toegepast zodra je het selecteert.",
+            key=k_live("profile_lib_auto_apply"),
+        )
+
+        def _apply_entry(_entry):
+            cfg = load_library_profile(_entry)
+            st.session_state.setdefault("pair_cfg", {})
+            st.session_state["pair_cfg"].setdefault(sym_sel, {}).update(cfg)
+            health_note("Applied library profile", f"{sym_sel} {timeframe} {_entry.id}")
+            st.toast(f"Applied profile for {sym_sel}", icon="✅")
+
+        # Filter entries by symbol + timeframe (sorted newest first)
+        entries = list_library_entries(symbol=sym_sel, timeframe=timeframe)
+
+        if not entries:
+            st.info("Geen library-profielen gevonden voor dit symbol/timeframe. Run Trainer met 'Auto-save PASS profiles to Library' aan.")
+        else:
+            def _fmt(e):
+                tag = "PASS" if bool(e.gates_passed) else "FAIL"
+                hint = "" if e.score_hint is None else f" | hint {float(e.score_hint):.2f}"
+                return f"{e.created_at} | {tag}{hint} | id {e.id}"
+
+            # --- Quick apply: latest PASS
+            latest_pass = next((e for e in entries if bool(getattr(e, "gates_passed", False))), None)
+            cols = st.columns([1, 1])
+            with cols[0]:
+                if st.button("Use latest PASS profile", use_container_width=True, disabled=(latest_pass is None)):
+                    try:
+                        _apply_entry(latest_pass)
+                        st.success(f"Applied latest PASS profile for {sym_sel}.")
+                    except Exception as e:
+                        st.error(f"Could not apply latest PASS profile: {e}")
+            with cols[1]:
+                if st.button("Open Profile Library folder", use_container_width=True):
+                    st.info("Library staat in: data/profile_library/ (index.json + profiles/).")
+
+            if latest_pass is None:
+                st.warning("Geen PASS-profiel gevonden voor dit symbol/timeframe (wel entries aanwezig).")
+
+            entry = st.selectbox("Library profile", options=entries, format_func=_fmt, key=k_live("profile_lib_entry"))
+
+            # Manual apply button
+            if st.button("Apply selected profile to session", use_container_width=True):
+                try:
+                    _apply_entry(entry)
+                    st.success(f"Applied library profile for {sym_sel}.")
+                except Exception as e:
+                    st.error(f"Could not apply library profile: {e}")
+
+            # Auto-apply when selection changes
+            sel_key = k_live("profile_lib_entry_last_id")
+            last_id = st.session_state.get(sel_key)
+            current_id = getattr(entry, "id", None)
+            if auto_apply and current_id and current_id != last_id:
+                try:
+                    _apply_entry(entry)
+                except Exception as e:
+                    st.error(f"Auto-apply failed: {e}")
+            st.session_state[sel_key] = current_id
+
 refresh = st.sidebar.slider("Refresh sec", 5, 60, 15)
+("Refresh sec", 5, 60, 15)
 st_autorefresh(interval=refresh * 1000, key=k_live("refresh"))
 
 # Persist Live UI prefs (survive reload/session reset)
