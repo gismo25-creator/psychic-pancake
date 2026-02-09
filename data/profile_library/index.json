@@ -1,0 +1,14 @@
+{
+  "entries": [],
+  "items": [
+    {
+      "id": "ACTIVE_MIGRATED::BTC/EUR::15m",
+      "symbol": "BTC/EUR",
+      "timeframe": "15m",
+      "gates_passed": true,
+      "path": "data/profile_library/profiles/BTC-EUR__15m__ACTIVE_MIGRATED.json",
+      "created_at": "2026-02-09T20:09:41Z",
+      "source": "active.json"
+    }
+  ]
+}

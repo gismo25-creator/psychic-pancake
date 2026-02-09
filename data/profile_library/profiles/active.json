@@ -50,7 +50,7 @@
     "trainer_fold_rows": [],
     "sanity_passed": true,
     "sanity_summary": {
-      "bundle_id": "::data\\profiles\\watchlist.json",
+      "bundle_id": "2026-01-16T23:42:09.493452+00:00::data\\profiles\\ETH-bundle_global_15m_20260116_234209.json",
       "require_no_errors": true,
       "n_symbols": 0,
       "fails": 0,

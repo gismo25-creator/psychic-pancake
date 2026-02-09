@@ -55,18 +55,67 @@ def _write_index(doc: Dict[str, Any]) -> None:
     INDEX_PATH.write_text(json.dumps(doc, indent=2), encoding="utf-8")
 
 
+def _coerce_items_to_entries(doc: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """Backward/forward compatibility.
+
+    Some builds wrote `index.json` with an `items` array containing:
+      {id, symbol, timeframe, gates_passed, path, created_at, source}
+
+    The Live UI expects `entries` items matching LibraryEntry (including `filename`).
+    This function converts `items` -> entry dicts best-effort.
+    """
+    out: List[Dict[str, Any]] = []
+    for it in (doc.get("items") or []):
+        if not isinstance(it, dict):
+            continue
+        symbol = str(it.get("symbol") or "").upper()
+        tf = str(it.get("timeframe") or "")
+        created_at = str(it.get("created_at") or "")
+        gates = bool(it.get("gates_passed", False))
+        src = str(it.get("source") or it.get("source_bundle") or "migrated")
+        # Determine filename from path if present
+        path = str(it.get("path") or it.get("filename") or "")
+        filename = ""
+        if path:
+            filename = Path(path).name
+        # Produce a short stable-ish id
+        raw_id = str(it.get("id") or "")
+        short_id = raw_id[-8:] if len(raw_id) >= 8 else (raw_id or "migrated")
+        out.append({
+            "id": short_id,
+            "symbol": symbol,
+            "timeframe": tf,
+            "created_at": created_at,
+            "source_bundle": src,
+            "gates_passed": gates,
+            "score_hint": None,
+            "filename": filename,
+        })
+    return out
+
 def list_entries(symbol: Optional[str] = None, timeframe: Optional[str] = None) -> List[LibraryEntry]:
     doc = _read_index()
+    raw_entries = (doc.get("entries") or [])
+    # Compatibility: if `entries` is empty but `items` exists, coerce.
+    if (not raw_entries) and (doc.get("items")):
+        raw_entries = _coerce_items_to_entries(doc)
+
     out: List[LibraryEntry] = []
-    for raw in (doc.get("entries") or []):
+    for raw in raw_entries:
         try:
             e = LibraryEntry(**raw)
         except Exception:
             continue
-        if symbol and e.symbol.upper() != symbol.upper():
+        if symbol and e.symbol.upper() != str(symbol).upper():
             continue
-        if timeframe and e.timeframe != timeframe:
+        if timeframe and e.timeframe != str(timeframe):
             continue
+        # If filename is missing but exists in PROFILES_DIR via common names, try to locate it.
+        if not e.filename:
+            # try the migrated naming pattern
+            cand = f"{e.symbol.replace('/','-')}__{e.timeframe}__ACTIVE_MIGRATED.json"
+            if (PROFILES_DIR / cand).exists():
+                e.filename = cand  # type: ignore[attr-defined]
         out.append(e)
     out.sort(key=lambda x: x.created_at, reverse=True)
     return out
@@ -118,7 +167,13 @@ def save_profile(
 
 def load_profile(entry: LibraryEntry) -> Dict[str, Any]:
     ensure_dirs()
-    doc = json.loads((PROFILES_DIR / entry.filename).read_text(encoding="utf-8"))
+    fname = entry.filename
+    # Fallback: try to resolve missing filename for migrated entries
+    if not fname:
+        cand = f"{entry.symbol.replace('/','-')}__{entry.timeframe}__ACTIVE_MIGRATED.json"
+        if (PROFILES_DIR / cand).exists():
+            fname = cand
+    doc = json.loads((PROFILES_DIR / fname).read_text(encoding="utf-8"))
     return doc.get("profile") or {}
 
 

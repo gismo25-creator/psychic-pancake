@@ -11,20 +11,24 @@ from typing import Dict, Tuple
 import pandas as pd
 import streamlit as st
 
+
 # ----------------------------
 # Health / diagnostics (persisted in session_state)
 # ----------------------------
 HEALTH_KEY = "health"
+
 
 def _health() -> dict:
     if HEALTH_KEY not in st.session_state or not isinstance(st.session_state.get(HEALTH_KEY), dict):
         st.session_state[HEALTH_KEY] = {}
     return st.session_state[HEALTH_KEY]
 
+
 def health_set(k: str, v) -> None:
     h = _health()
     h[k] = v
     st.session_state[HEALTH_KEY] = h
+
 
 def health_note(event: str, detail: str = "") -> None:
     now = time.time()
@@ -33,10 +37,12 @@ def health_note(event: str, detail: str = "") -> None:
     if detail:
         health_set("last_event_detail", str(detail)[:800])
 
+
 PAGE_NS_LIVE = "live"
 
 def k_live(s: str) -> str:
     return f"{PAGE_NS_LIVE}:{s}"
+
 
 # --- Scanner export fallback (pairs) ---
 try:
@@ -53,6 +59,7 @@ except Exception:
 
 if "scanner:export_pairs_fallback" in st.session_state:
     st.session_state[k_live("manual_symbols_input")] = st.session_state.get("scanner:export_pairs_fallback", st.session_state.get(k_live("manual_symbols_input"), ""))
+
 
 STATE_NS_LIVE = "live"
 
@@ -89,6 +96,7 @@ from core.ml.regime import classify_regime
 from core.profiles.registry import active_path, load_bundle, validate_bundle
 from core.profiles.library import list_entries as list_library_entries, load_profile as load_library_profile
 
+
 # ----------------------------
 # Run control state (global)
 # ----------------------------
@@ -101,11 +109,13 @@ if "start_pending" not in st.session_state:
 if "start_pending_ts" not in st.session_state:
     st.session_state.start_pending_ts = 0.0
 
+
 if "panic_flatten" not in st.session_state:
     st.session_state.panic_flatten = False
 
 if "start_equity" not in st.session_state:
     st.session_state.start_equity = None
+
 
 FEE_TIERS_CAT_A = [
     ("€0+",        0.0015, 0.0025),
@@ -120,6 +130,7 @@ FEE_TIERS_CAT_A = [
     ("€100M+",     0.0000, 0.0001),
     ("€500M+",     0.0000, 0.0001),
 ]
+
 
 # --- Execution mode defaults (defined early so top buttons can reference them) ---
 exec_mode = st.session_state.get('exec_mode', 'Simulation (paper, candle close)')
@@ -184,11 +195,13 @@ if lk('refresh_sec') not in st.session_state and 'refresh_sec' in _prefs:
 if lk('exec_mode') not in st.session_state and 'exec_mode' in _prefs:
     st.session_state[lk('exec_mode')] = str(_prefs['exec_mode'])
 
+
 st.title("Grid Trading Bot – Bitvavo (Simulation + Panic Button + Auto-Pause)")
 
 # --- BB state (for mean-reversion buy-filter) ---
 if "bb_state" not in st.session_state:
     st.session_state["bb_state"] = {}
+
 
 # --- Top controls: Start / Stop / Stop & Flatten / Reset ---
 c1, c2, c3, c4, c5 = st.columns(5)
@@ -236,6 +249,7 @@ with c5:
         st.session_state.clear()
         st.rerun()
 
+
 # --- Resume confirmation (anti-misclick) ---
 # Window: 15 seconds to confirm, otherwise pending state expires.
 if st.session_state.start_pending:
@@ -254,12 +268,15 @@ if st.session_state.start_pending:
                     st.session_state.trading_enabled = True
                 st.session_state.start_pending = False
 
+
 if exec_mode.startswith("Live") and st.session_state.get("live_enabled", False):
     st.warning("LIVE EXECUTOR ENABLED: this session can place REAL orders on Bitvavo. Use small sizing and confirm your settings.")
 
 st.caption(f"Trading status: {'RUNNING' if st.session_state.trading_enabled else 'STOPPED'} | Mode: {exec_mode}")
 
+
 # ----------------------------
+
 
 # Safety gates for LIVE (real orders)
 live_allowed = True
@@ -276,6 +293,7 @@ if exec_mode.startswith("Live"):
     allow_dryrun_without_active = st.sidebar.checkbox(
         "Allow Live without ACTIVE bundle (dangerous)",
         value=False,
+        help="For testing only. When OFF, Live requires a sanity_passed ACTIVE bundle from Profile Manager.",
     )
 
     # Also allow LIVE if you have PASS Library profiles applied (simple workflow).
@@ -332,7 +350,7 @@ if exec_mode.startswith("Live"):
             st.sidebar.warning("Live gate bypass: using PASS Library profiles (no ACTIVE bundle). Test carefully.")
         else:
             live_allowed = False
-            msg = "Live gate: no ACTIVE bundle found. Promote a bundle to ACTIVE (or enable PASS Library bypass)."
+            msg = "Live gate: no ACTIVE bundle found. Promote a bundle to ACTIVE in Profile Manager."
             if allow_live_with_library and (not library_ready):
                 msg += "\nLibrary gate failed for: " + ", ".join(library_missing) + ". Apply latest PASS profile in Profiles (simple)."
             st.sidebar.error(msg)
@@ -344,6 +362,7 @@ if exec_mode.startswith("Live"):
                     st.sidebar.warning("\n".join(warns))
                 if (not ok) and (not allow_dryrun_without_active):
                     live_allowed = False
+                    st.sidebar.error("Live gate: ACTIVE bundle invalid. Fix/replace it in Profile Manager.")
                 else:
                     meta = active_bundle.get("meta", {}) or {}
                     if (not bool(meta.get("sanity_passed", False))) and (not allow_dryrun_without_active):
@@ -523,6 +542,7 @@ if use_bot_manager:
         st.sidebar.warning("Bots hebben geen geldige symbols.")
         st.stop()
 
+
     # Show bot pairs (read-only) — does not modify the manual pairs widget state
     st.sidebar.text_area("Bot pairs (from Bot Manager)", ", ".join(symbols_from_bots), height=90, disabled=True)
 manual_symbols_input = st.sidebar.text_input("Pairs (comma-separated)", key=lk("manual_symbols_input"), disabled=use_bot_manager, on_change=_sync_prefs_from_state)
@@ -642,6 +662,7 @@ if use_bot_manager and exec_mode.startswith("Live"):
 allow_dryrun_without_active = st.sidebar.checkbox(
     "Allow Dry-run without ACTIVE bundle (not recommended)",
     value=False,
+    help="If disabled (default), Dry-run Live requires an ACTIVE bundle promoted via Profile Manager with sanity_passed=True."
 )
 
 dryrun_allowed = True
@@ -650,6 +671,7 @@ if exec_mode.startswith("Dry-run"):
     ap = active_path()
     if (not allow_dryrun_without_active) and (not Path(ap).is_file()):
         dryrun_allowed = False
+        st.sidebar.error("Dry-run Live gate: no ACTIVE bundle found. Promote a sanity-passed bundle to ACTIVE in Profile Manager.")
     elif Path(ap).is_file():
         try:
             active_bundle = load_bundle(ap)
@@ -658,6 +680,7 @@ if exec_mode.startswith("Dry-run"):
                 st.sidebar.warning("\n".join(warns))
             if (not ok) and (not allow_dryrun_without_active):
                 dryrun_allowed = False
+                st.sidebar.error("Dry-run Live gate: ACTIVE bundle invalid. Fix/replace it in Profile Manager.")
             else:
                 meta = active_bundle.get("meta", {}) or {}
                 if (not bool(meta.get("sanity_passed", False))) and (not allow_dryrun_without_active):
@@ -670,6 +693,10 @@ if exec_mode.startswith("Dry-run"):
 
 st.session_state['dryrun_allowed'] = bool(dryrun_allowed)
 st.session_state['active_bundle'] = active_bundle
+
+
+
+
 
 # ----------------------------
 # Fees & slippage
@@ -687,6 +714,7 @@ if custom_fees:
     taker_fee = st.sidebar.number_input("Taker fee (%)", 0.0, 1.0, float(taker_fee * 100), step=0.01) / 100.0
 
 slippage_pct = st.sidebar.number_input("Slippage (%)", 0.0, 1.0, 0.05, step=0.01) / 100.0
+
 
 # ----------------------------
 # Risk (collapsible)
@@ -779,6 +807,7 @@ with st.sidebar.expander("Risk", expanded=False):
         disabled=(not enable_asset_stop or not use_atr_stop)
     )
 
+
 # ----------------------------
 # Interpretable execution (UI)
 # ----------------------------
@@ -808,6 +837,13 @@ with st.sidebar.expander("Metrics", expanded=False):
     st.subheader("Range efficiency & streaks (metrics)")
     hit_window = st.slider("Hit-rate window (candles)", 20, 500, 150, step=10)
     streak_scope = st.slider("Streak scope (closed cycles)", 20, 2000, 300, step=20)
+
+
+
+
+with st.sidebar.expander("Profiles & governance", expanded=False):
+    st.subheader("Governance")
+    st.caption("Gebruik de Profile Manager pagina voor diff/validatie en apply.")
 
     st.subheader("Profiles import/export")
 
@@ -899,6 +935,7 @@ with st.sidebar.expander("Metrics", expanded=False):
         file_name="profiles.json",
         width="stretch",
     )
+
 
 # ----------------------------
 # Per-pair grid settings
@@ -1118,6 +1155,8 @@ for sym in symbols:
             disabled=(not bool(cfg.get("trend_guard_enable", True))), key=k_live(f"{sym}_tg_thr")
         )
 
+
+
 st.markdown("---")
 cfg["auto_optimize"] = st.checkbox(
     f"{sym} Auto-optimize grid range/levels",
@@ -1207,6 +1246,8 @@ try:
 except Exception:
     pass
 
+
+
 # ----------------------------
 # Session state dicts
 # ----------------------------
@@ -1229,9 +1270,11 @@ if s_live('pair_paused') not in st.session_state:
 if s_live('last_bar_ts') not in st.session_state:
     st.session_state[s_live('last_bar_ts')] = {}  # symbol -> last processed closed bar timestamp
 
+
 # --- Interpretable execution log (per pair)
 if "decision_log" not in st.session_state:
     st.session_state.decision_log = {}  # sym -> deque of decision dicts
+
 
 # ----------------------------
 # Fetch data per pair
@@ -1354,6 +1397,7 @@ if use_bot_manager:
             st.session_state.bot_engines[eng_key] = eng
 
         eng = st.session_state.bot_engines[eng_key]
+
 
         # --- Bot-level trailing stop (inventory protection) + cooldown to avoid immediate re-buy
         if "bot_trailing_state" not in st.session_state:
@@ -1538,6 +1582,7 @@ if use_bot_manager:
 
     st.stop()
 
+
 def compute_returns(df: pd.DataFrame) -> pd.Series:
     # log returns on close
     s = pd.Series(df["close"]).astype(float)
@@ -1562,6 +1607,7 @@ def compute_metrics(df: pd.DataFrame, price: float) -> Tuple[float, float, float
     regime = classify_regime(dfm, atr_pct, rv_val, bb_val, adx_val)
     return atr_val, atr_pct, rv_val, bb_val, adx_val, regime
 
+
 def apply_hysteresis(symbol: str, raw_regime: str) -> str:
     now = time.time()
     if symbol not in st.session_state[s_live('regime_state')]:
@@ -1584,6 +1630,7 @@ def apply_hysteresis(symbol: str, raw_regime: str) -> str:
             state["effective"] = candidate
             state["last_change"] = now
     return state["effective"]
+
 
 # ----------------------------
 # Correlation prep (rolling)
@@ -1701,6 +1748,7 @@ def compute_streaks(pnls):
         "max_loss_streak": int(max_loss),
     }
 
+
 def propose_grid_params(
     df: pd.DataFrame,
     price: float,
@@ -1788,6 +1836,7 @@ def propose_grid_params(
 
     return best[1], best[2], best[3], best[4]
 
+
 def dyn_order_size_multiplier(
     eff_regime: str,
     hit_rate: float,
@@ -1825,6 +1874,7 @@ def dyn_order_size_multiplier(
     m = float(max(float(min_mult), min(float(max_mult), m)))
     return m
 
+
 # ----------------------------
 # STOP-LOSS CHECKS + PANIC FLATTEN
 # ----------------------------
@@ -1849,6 +1899,7 @@ dd_assets_count = len(assets_in_dd)
 
 if st.session_state.start_equity is None:
     st.session_state.start_equity = float(eq) if eq > 0 else 1.0
+
 
 # Execute panic flatten once prices are known (always)
 if st.session_state.get("panic_flatten", False):
@@ -1895,6 +1946,7 @@ try:
         st.session_state.dd_hist = st.session_state.dd_hist[-240:]
 except Exception:
     pass
+
 
 # Portfolio drawdown stop (auto-pause)
 portfolio_stop_triggered = False
@@ -1944,6 +1996,7 @@ if asset_stops_triggered:
 # If portfolio stop active: disallow new buys globally
 global_allow_buys = not st.session_state[s_live('portfolio_stop_active')]
 
+
 # --- BUY guard: portfolio-level pre-trade filters ---
 def buy_guard(symbol: str, amount_base: float, limit_price: float, ts):
     # 1) Max assets-in-drawdown (hard block on new buys once limit reached)
@@ -1965,6 +2018,7 @@ def buy_guard(symbol: str, amount_base: float, limit_price: float, ts):
                 if (not math.isnan(c)) and c >= corr_threshold:
                     return False, f"CORRELATION_LIMIT: corr({symbol},{hs})={c:.2f} >= {corr_threshold:.2f}"
 
+
     # 3) BB mean-reversion buy-filter (interpretable)
     try:
         bs = st.session_state["bb_state"].get(symbol)
@@ -1980,6 +2034,7 @@ def buy_guard(symbol: str, amount_base: float, limit_price: float, ts):
         pass
 
     return True, "OK"
+
 
 # ----------------------------
 # Run engines per pair
@@ -2005,6 +2060,7 @@ for sym, df in dfs.items():
             st.session_state["bb_state"][sym] = {"enable": False}
     except Exception:
         st.session_state["bb_state"][sym] = {"enable": False}
+
 
     # --- Effective order size (equity scaling) ---
     eff_order_size = float(cfg["order_size"])
@@ -2089,6 +2145,7 @@ for sym, df in dfs.items():
     qgrid = sorted({round(float(x), pdec) for x in grid})
     if len(qgrid) >= 2:
         grid = qgrid
+
 
     # --- Engine/grid reuse: keep grid fixed and only rebuild when config/regime changes or price leaves bounds.
     cfg_sig = (
@@ -2334,6 +2391,7 @@ with st.expander("Drawdown history (last points)", expanded=False):
     else:
         st.caption("No history yet.")
 
+
 # --- Bitvavo LIVE account snapshot (balances + open orders)
 # Show this panel whenever the user is in Live mode.
 # Fetching balances/orders is read-only and useful even when the live executor itself
@@ -2526,6 +2584,7 @@ if exec_mode.startswith("Live"):
         except Exception as e:
             st.error(f"Failed to fetch open orders: {e}")
 
+
 if st.session_state[s_live('asset_halt')]:
     st.warning(f"Asset halt active (no new buys): {', '.join(sorted(st.session_state[s_live('asset_halt')]))}")
 
@@ -2579,6 +2638,7 @@ with st.expander("Correlation matrix (rolling)", expanded=False):
         st.caption("Correlation filter disabled or insufficient data.")
     else:
         st.dataframe(corr_matrix.round(2), width="stretch", height=220)
+
 
 # ----------------------------
 # Tabs per pair
@@ -2747,6 +2807,7 @@ for i, sym in enumerate(dfs.keys()):
 
 st.caption("Stop-loss in simulatie: portfolio drawdown stop (optioneel flatten) + per-asset stop (avg-entry % en optioneel ATR). Reset session om stops te clearen.")
 
+
 # ----------------------------
 # Health panel (sidebar)
 # ----------------------------
@@ -2767,6 +2828,7 @@ try:
             pass
 except Exception:
     pass
+
 
 with st.sidebar.expander("Health / diagnostics", expanded=False):
     h = _health()

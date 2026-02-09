@@ -1,20 +1,20 @@
 {
   "schema_version": 1,
-  "created_at": "2026-01-15T23:39:34.525146+00:00",
+  "created_at": "2026-01-16T23:42:09.493452+00:00",
   "meta": {
     "mode": "GLOBAL",
     "symbols": [
-      "BTC/EUR"
+      "ETH/EUR"
     ],
     "timeframe": "15m",
-    "lookback_days": 135,
+    "lookback_days": 90,
     "folds": 4,
     "test_window_days": 14,
     "step_days": 14,
-    "min_train_days": 73,
-    "max_evals_per_regime": 130,
+    "min_train_days": 63,
+    "max_evals_per_regime": 160,
     "restarts": 6,
-    "rng_seed": 1338,
+    "rng_seed": 1337,
     "fees": {
       "maker": 0.001,
       "taker": 0.0025,
@@ -27,8 +27,8 @@
       "require_positive_test_pnl": true,
       "min_worst_fold_test_pnl": 0.0,
       "min_test_trades_per_fold": 30,
-      "min_test_trades_avg": 30,
-      "max_test_dd_cap_pct": 5.0
+      "min_test_trades_avg": 20,
+      "max_test_dd_cap_pct": 12.5
     },
     "gates_passed": true,
     "gates_failed": [],
@@ -36,46 +36,37 @@
       {
         "symbol": "GLOBAL",
         "status": "OK",
-        "primary_symbol": "BTC/EUR",
-        "symbols_used": "BTC/EUR",
-        "test_score_avg": -0.18299730253959368,
-        "test_score_med": 5.65148996970328,
-        "test_total_pnl_avg": 0.5939444254008777,
-        "test_max_dd_worst_pct": 2.5496581285305395,
-        "test_max_dd_avg_pct": 0.7769417279404721,
-        "test_trades_avg": 71.5,
-        "folds_used_total": 4
+        "primary_symbol": "ETH/EUR",
+        "symbols_used": "ETH/EUR",
+        "test_score_avg": 1.8122968965817834,
+        "test_score_med": 1.8122968965817834,
+        "test_total_pnl_avg": 4.019306101646293,
+        "test_max_dd_worst_pct": 2.20700920506451,
+        "test_max_dd_avg_pct": 2.20700920506451,
+        "test_trades_avg": 139.0,
+        "folds_used_total": 1
       }
     ],
-    "trainer_fold_rows": [],
-    "sanity_passed": true,
-    "sanity_summary": {
-      "bundle_id": "::data\\profiles\\watchlist.json",
-      "require_no_errors": true,
-      "n_symbols": 0,
-      "fails": 0,
-      "errors": 0
-    },
-    "sanity_rows": []
+    "trainer_fold_rows": []
   },
   "profiles": {
-    "BTC/EUR": {
+    "ETH/EUR": {
       "use_regime_profiles": true,
       "regime_profile_rebuild": false,
       "regime_profiles": {
         "RANGE": {
-          "range_pct": 1.5,
-          "levels": 14,
+          "range_pct": 0.5,
+          "levels": 12,
           "order_size_mult": 0.6,
           "cycle_tp_enable": true,
-          "cycle_tp_pct": 0.6
+          "cycle_tp_pct": 1.2
         },
         "TREND": {
-          "range_pct": 2.5,
-          "levels": 14,
+          "range_pct": 1.0,
+          "levels": 20,
           "order_size_mult": 0.6,
           "cycle_tp_enable": true,
-          "cycle_tp_pct": 1.0
+          "cycle_tp_pct": 2.0
         },
         "CHAOS": {
           "range_pct": 3.0,
@@ -85,11 +76,11 @@
           "cycle_tp_pct": 0.5
         },
         "WARMUP": {
-          "range_pct": 2.0,
-          "levels": 12,
+          "range_pct": 0.5,
+          "levels": 16,
           "order_size_mult": 1.2,
           "cycle_tp_enable": true,
-          "cycle_tp_pct": 0.6
+          "cycle_tp_pct": 1.5
         }
       }
     }

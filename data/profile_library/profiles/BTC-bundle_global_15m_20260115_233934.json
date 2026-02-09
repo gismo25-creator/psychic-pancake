@@ -47,16 +47,7 @@
         "folds_used_total": 4
       }
     ],
-    "trainer_fold_rows": [],
-    "sanity_passed": true,
-    "sanity_summary": {
-      "bundle_id": "::data\\profiles\\watchlist.json",
-      "require_no_errors": true,
-      "n_symbols": 0,
-      "fails": 0,
-      "errors": 0
-    },
-    "sanity_rows": []
+    "trainer_fold_rows": []
   },
   "profiles": {
     "BTC/EUR": {

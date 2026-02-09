@@ -1,13 +1,13 @@
 [
   {
     "id": "455a4f80",
-    "name": "sol",
-    "symbol": "SOL/EUR",
+    "name": "BTC",
+    "symbol": "BTC/EUR",
     "enabled": true,
-    "budget_eur": 200.0,
+    "budget_eur": 100.0,
     "grid_type": "Linear",
     "base_range_pct": 1.0,
-    "base_levels": 12,
+    "base_levels": 5,
     "order_size_base": 0.001,
     "dynamic_spacing": true,
     "tp_floor_pct": 0.35,

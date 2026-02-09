@@ -1,0 +1,59 @@
+{
+  "id": "ACTIVE_MIGRATED::BTC/EUR::15m",
+  "created_at": "2026-02-09T20:09:41Z",
+  "source": "active.json",
+  "symbol": "BTC/EUR",
+  "timeframe": "15m",
+  "gates_passed": true,
+  "meta": {
+    "schema_version": 1,
+    "active_created_at": "2026-01-15T23:39:34.525146+00:00",
+    "trainer_gates": {
+      "require_positive_test_pnl": true,
+      "min_worst_fold_test_pnl": 0.0,
+      "min_test_trades_per_fold": 30,
+      "min_test_trades_avg": 30,
+      "max_test_dd_cap_pct": 5.0
+    },
+    "fees": {
+      "maker": 0.001,
+      "taker": 0.0025,
+      "slippage": 9.999999999999996e-05,
+      "mode": "maker"
+    }
+  },
+  "profile": {
+    "use_regime_profiles": true,
+    "regime_profile_rebuild": false,
+    "regime_profiles": {
+      "RANGE": {
+        "range_pct": 1.5,
+        "levels": 14,
+        "order_size_mult": 0.6,
+        "cycle_tp_enable": true,
+        "cycle_tp_pct": 0.6
+      },
+      "TREND": {
+        "range_pct": 2.5,
+        "levels": 14,
+        "order_size_mult": 0.6,
+        "cycle_tp_enable": true,
+        "cycle_tp_pct": 1.0
+      },
+      "CHAOS": {
+        "range_pct": 3.0,
+        "levels": 8,
+        "order_size_mult": 0.6,
+        "cycle_tp_enable": true,
+        "cycle_tp_pct": 0.5
+      },
+      "WARMUP": {
+        "range_pct": 2.0,
+        "levels": 12,
+        "order_size_mult": 1.2,
+        "cycle_tp_enable": true,
+        "cycle_tp_pct": 0.6
+      }
+    }
+  }
+}

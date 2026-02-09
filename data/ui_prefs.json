@@ -1,7 +1,7 @@
 {
   "exec_mode": "Simulation (paper)",
-  "manual_symbols_input": "",
+  "manual_symbols_input": "BTC/EUR",
   "refresh_sec": 15,
   "timeframe": "5m",
-  "use_bot_manager": true
+  "use_bot_manager": false
 }

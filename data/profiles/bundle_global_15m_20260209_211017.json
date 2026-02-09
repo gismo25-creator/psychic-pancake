@@ -1,10 +1,10 @@
 {
   "schema_version": 1,
-  "created_at": "2026-02-04T19:17:02.376087+00:00",
+  "created_at": "2026-02-09T21:10:17.047236+00:00",
   "meta": {
     "mode": "GLOBAL",
     "symbols": [
-      "ETH/EUR"
+      "BTC/EUR"
     ],
     "timeframe": "15m",
     "lookback_days": 90,
@@ -12,14 +12,14 @@
     "test_window_days": 14,
     "step_days": 14,
     "min_train_days": 30,
-    "max_evals_per_regime": 160,
-    "restarts": 6,
-    "rng_seed": 1337,
+    "max_evals_per_regime": 150,
+    "restarts": 3,
+    "rng_seed": 1336,
     "fees": {
       "maker": 0.001,
       "taker": 0.0025,
       "slippage": 0.0001,
-      "mode": "maker"
+      "mode": "taker"
     },
     "git_commit": "",
     "data_hashes": {},
@@ -32,41 +32,41 @@
     },
     "gates_passed": false,
     "gates_failed": [
-      "MIN_TRADES_AVG"
+      "NEG_TEST_PNL_AVG"
     ],
     "trainer_report_rows": [
       {
         "symbol": "GLOBAL",
         "status": "OK",
-        "primary_symbol": "ETH/EUR",
-        "symbols_used": "ETH/EUR",
-        "test_score_avg": -267.51834747176855,
-        "test_score_med": -103.33704939028316,
-        "test_total_pnl_avg": 13.804430211804629,
-        "test_max_dd_worst_pct": 1.748773193396438,
-        "test_max_dd_avg_pct": 0.5626455053671464,
-        "test_trades_avg": 4.0,
+        "primary_symbol": "BTC/EUR",
+        "symbols_used": "BTC/EUR",
+        "test_score_avg": -100.90062249374014,
+        "test_score_med": -95.06072608834148,
+        "test_total_pnl_avg": -14.770521519119967,
+        "test_max_dd_worst_pct": 2.562770788843231,
+        "test_max_dd_avg_pct": 1.7226020194924037,
+        "test_trades_avg": 60.25,
         "folds_used_total": 4
       }
     ],
     "trainer_fold_rows": []
   },
   "profiles": {
-    "ETH/EUR": {
+    "BTC/EUR": {
       "use_regime_profiles": true,
-      "regime_profile_rebuild": false,
+      "regime_profile_rebuild": true,
       "regime_profiles": {
         "RANGE": {
-          "range_pct": 1.0,
-          "levels": 14,
-          "order_size_mult": 1.0,
+          "range_pct": 2.0,
+          "levels": 8,
+          "order_size_mult": 0.6,
           "cycle_tp_enable": true,
           "cycle_tp_pct": 0.8
         },
         "TREND": {
           "range_pct": 2.0,
-          "levels": 10,
-          "order_size_mult": 0.8,
+          "levels": 8,
+          "order_size_mult": 0.6,
           "cycle_tp_enable": false,
           "cycle_tp_pct": 0.35
         },
@@ -78,11 +78,11 @@
           "cycle_tp_pct": 1.2
         },
         "WARMUP": {
-          "range_pct": 1.0,
-          "levels": 12,
-          "order_size_mult": 0.8,
-          "cycle_tp_enable": false,
-          "cycle_tp_pct": 0.35
+          "range_pct": 1.5,
+          "levels": 16,
+          "order_size_mult": 0.6,
+          "cycle_tp_enable": true,
+          "cycle_tp_pct": 0.8
         }
       }
     }
