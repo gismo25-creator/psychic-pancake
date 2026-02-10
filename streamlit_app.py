@@ -532,7 +532,8 @@ if use_bot_manager and symbols_from_bots:
     symbols = symbols_from_bots
 symbols = list(dict.fromkeys(symbols))  # de-dupe to avoid duplicate widget keys
 if not symbols:
-    st.stop()
+    st.sidebar.warning("No pairs selected. Fill 'Pairs (comma-separated)' with at least one symbol (e.g. BTC/EUR).")
+    symbols = []
 timeframe = st.sidebar.selectbox("Timeframe", ["1m", "5m", "15m"], index=1)
 
 # ----------------------------
