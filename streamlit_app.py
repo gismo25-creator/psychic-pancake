@@ -272,6 +272,16 @@ live_ack = False
 allow_dryrun_without_active = False
 
 if exec_mode.startswith("Live"):
+    # Load ACTIVE bundle (if present) for Live gating
+    try:
+        ap = active_path()
+        if ap and Path(ap).exists():
+            active_bundle = load_bundle(ap)
+            st.session_state["active_bundle"] = active_bundle
+    except Exception as e:
+        active_bundle = None
+        st.sidebar.warning(f"Could not load ACTIVE bundle: {e}")
+
     # Optional override for advanced testing only. Keep OFF for normal operation.
     allow_dryrun_without_active = st.sidebar.checkbox(
         "Allow Live without ACTIVE bundle (dangerous)",
@@ -532,8 +542,8 @@ if use_bot_manager and symbols_from_bots:
     symbols = symbols_from_bots
 symbols = list(dict.fromkeys(symbols))  # de-dupe to avoid duplicate widget keys
 if not symbols:
-    st.sidebar.warning("No pairs selected. Fill 'Pairs (comma-separated)' with at least one symbol (e.g. BTC/EUR).")
-    symbols = []
+    st.sidebar.warning('No symbols selected; defaulting to BTC/EUR for UI rendering.')
+    symbols = ['BTC/EUR']
 timeframe = st.sidebar.selectbox("Timeframe", ["1m", "5m", "15m"], index=1)
 
 # ----------------------------
@@ -636,8 +646,19 @@ exec_mode = st.sidebar.selectbox(
 )
 # Guard: Bot Manager virtual budgets currently supported only for Simulation/Dry-run
 if use_bot_manager and exec_mode.startswith("Live"):
-    st.sidebar.error("Live executor met virtuele bot-budget-reservering is nog niet ingeschakeld. Kies Simulation of Dry-run.")
-    st.stop()
+    st.sidebar.warning("Bot Manager is disabled in Live mode (for now). Switching to manual pairs.")
+    # one-time switch to avoid blocking the page
+    if not st.session_state.get(k_live("bm_live_switched"), False):
+        st.session_state[k_live("bm_live_switched")] = True
+        st.session_state[k_live("use_bot_manager")] = False
+        # persist to ui_prefs if present
+        try:
+            ui = st.session_state.get("ui_prefs", {}) or {}
+            ui["use_bot_manager"] = False
+            st.session_state["ui_prefs"] = ui
+        except Exception:
+            pass
+        st.rerun()
 
 # Safety gates for Dry-run Live
 allow_dryrun_without_active = st.sidebar.checkbox(
